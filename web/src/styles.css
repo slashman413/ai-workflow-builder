@@ -1,0 +1,86 @@
+:root {
+  --bg: #0f1115;
+  --card: #191c22;
+  --ink: #e7e9ee;
+  --muted: #9aa0ab;
+  --accent: #6ea8fe;
+  --accent-ink: #0b1220;
+  --danger: #ff7676;
+  --line: #2a2f38;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.app { max-width: 720px; margin: 0 auto; padding: 2rem 1rem 4rem; }
+header h1 { margin: 0; font-size: 1.6rem; }
+.tagline { color: var(--muted); margin-top: 0.25rem; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin-top: 1.25rem;
+}
+.card h2 { margin-top: 0; font-size: 1.1rem; }
+
+textarea, input[type='text'] {
+  width: 100%;
+  background: #0f1115;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem;
+  font: inherit;
+}
+
+button {
+  margin-top: 0.75rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: 0;
+  border-radius: 8px;
+  padding: 0.55rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+
+.error {
+  background: #3a1d1d;
+  color: var(--danger);
+  border: 1px solid #5a2a2a;
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  margin-top: 1rem;
+}
+
+.question { display: block; margin: 0.9rem 0; }
+.question span { display: block; margin-bottom: 0.35rem; color: var(--muted); }
+.req { color: var(--accent); font-style: normal; }
+
+.coverage { margin: 0.5rem 0 1rem; position: relative; }
+.coverage-bar { height: 6px; background: var(--accent); border-radius: 4px; transition: width 0.3s; }
+.coverage span { font-size: 0.8rem; color: var(--muted); }
+
+.done { color: #6ee7a8; }
+
+.nodes { list-style: none; padding: 0; }
+.node { border: 1px solid var(--line); border-radius: 10px; padding: 0.75rem; margin-bottom: 0.6rem; }
+.node-head { display: flex; align-items: center; gap: 0.5rem; }
+.badge {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
+  background: var(--accent); color: var(--accent-ink); padding: 0.1rem 0.4rem; border-radius: 4px;
+}
+.deps { color: var(--muted); font-size: 0.85rem; margin-top: 0.35rem; }
+.config { background: #0f1115; padding: 0.5rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto; }
+.wf-name { color: var(--muted); }
+.actions { margin-top: 1rem; }
