@@ -23,6 +23,7 @@ export function createRouter(service) {
         res.status(err.status).json({ error: err.code, message: err.message, details: err.details });
       } else {
         // Unexpected: log server-side, don't leak internals to the client.
+        // eslint-disable-next-line no-console
         console.error(err);
         res.status(500).json({ error: 'INTERNAL', message: 'Unexpected server error.' });
       }
@@ -55,8 +56,7 @@ export function createRouter(service) {
 const withStatus = (body, status) => ({ ...body, __status: status });
 const strip = (body) => {
   if (body && typeof body === 'object' && '__status' in body) {
-    const rest = { ...body };
-    delete rest.__status;
+    const { __status, ...rest } = body;
     return rest;
   }
   return body;

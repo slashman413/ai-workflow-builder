@@ -1,49 +1,64 @@
-name: CI/CD
+name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
-    branches: [main]
+    branches: [ main ]
 
 jobs:
-  test:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
         with:
-          node-version: '22'
-          cache: 'npm'
-      
+          node-version: '20'
+
       - name: Install dependencies
         run: npm ci
-      
-      - name: Run linter
-        run: npm run lint
-      
-      - name: Run tests
-        run: npm test
-      
-      - name: Build
+
+      - name: Run lint and tests
+        run: |
+          npm run lint
+          npm test
+
+      - name: Build production bundle
         run: npm run build
-  
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - name: Deploy to Vercel
-        if: secrets.VERCEL_TOKEN != ''
-        uses: amondnet/vercel-action@v25
+
+      - name: Build Docker image
+        run: |
+          docker build -t ghcr.io/${{ github.repository }}:latest .
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
         with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          working-directory: ./web
-      
-      - name: Deploy skipped (no Vercel credentials)
-        if: secrets.VERCEL_TOKEN == ''
-        run: echo "Skipping Vercel deploy — set VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID secrets to enable"
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Docker image
+        run: docker push ghcr.io/${{ github.repository }}:latest
+
+      - name: Deploy to Production (Kubernetes)
+        uses: azure/k8s-deploy@v4
+        with:
+          manifests: |
+            k8s/deployment.yaml
+            k8s/service.yaml
+          images: |
+            ghcr.io/${{ github.repository }}:latest
+          namespace: production
+          strategy: rolling
+
+      - name: Verify Deployment Health
+        run: |
+          # Simple health check curl
+          if curl -fSs http://your-production-endpoint/health; then
+            echo "Deployment healthy"
+          else
+            echo "Deployment failed" && exit 1
+          fi

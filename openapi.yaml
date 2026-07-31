@@ -1,0 +1,431 @@
+openapi: 3.1.0
+info:
+  title: ai-workflow-builder API
+  version: 1.0.0
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  description: |
+    Turn a single natural-language prompt into a tested, publishable multi-agent
+    AI workflow. Ambiguity is resolved by an interactive "Grill-Me" spec loop before
+    any code is generated, and generated code is only published if its generated
+    test suite passes.
+
+    ## Authentication
+    All `/api/v1/*` endpoints require `Authorization: Bearer <API_KEY>`. Keys are
+    configured server-side via the `AWB_API_KEYS` environment variable.
+
+    ## Lifecycle
+    submit prompt -> answer Grill-Me questions until the spec resolves -> generate
+    -> test -> (optionally) publish. See the workflow `state` field.
+servers:
+  - url: http://localhost:8000
+    description: Local
+security:
+  - bearerAuth: []
+tags:
+  - name: workflows
+  - name: agents
+  - name: system
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Liveness/readiness probe
+      security: []
+      responses:
+        '200':
+          description: Service is up and dependencies are reachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: A dependency is unreachable
+
+  /api/v1/agents:
+    get:
+      tags: [agents]
+      summary: List registered agents
+      parameters:
+        - name: capability
+          in: query
+          schema: { type: string }
+          description: Filter to agents providing this capability
+      responses:
+        '200':
+          description: The agents in the registry
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items: { $ref: '#/components/schemas/Agent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/workflows:
+    post:
+      tags: [workflows]
+      summary: Submit a prompt and start a build
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateWorkflowRequest' }
+            examples:
+              simple:
+                value:
+                  prompt: "Summarize a URL, translate it to Traditional Chinese, and post to Slack"
+                  interactive: true
+      responses:
+        '201':
+          description: Workflow created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workflow' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    get:
+      tags: [workflows]
+      summary: List workflows
+      parameters:
+        - name: state
+          in: query
+          schema: { $ref: '#/components/schemas/WorkflowState' }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: A page of workflows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workflows:
+                    type: array
+                    items: { $ref: '#/components/schemas/Workflow' }
+                  next_cursor:
+                    type: [string, "null"]
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/workflows/{id}:
+    parameters:
+      - $ref: '#/components/parameters/WorkflowId'
+    get:
+      tags: [workflows]
+      summary: Get a workflow's current state
+      responses:
+        '200':
+          description: The workflow
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workflow' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [workflows]
+      summary: Delete a workflow and its artifacts
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/workflows/{id}/questions:
+    parameters:
+      - $ref: '#/components/parameters/WorkflowId'
+    get:
+      tags: [workflows]
+      summary: Get open Grill-Me questions
+      responses:
+        '200':
+          description: Open questions (empty unless state is needs_clarification)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  spec_version: { type: integer }
+                  questions:
+                    type: array
+                    items: { $ref: '#/components/schemas/Question' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/workflows/{id}/answers:
+    parameters:
+      - $ref: '#/components/parameters/WorkflowId'
+    post:
+      tags: [workflows]
+      summary: Answer Grill-Me questions to advance the spec
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnswersRequest' }
+      responses:
+        '200':
+          description: Updated workflow (may surface follow-up questions)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workflow' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+
+  /api/v1/workflows/{id}/spec:
+    parameters:
+      - $ref: '#/components/parameters/WorkflowId'
+    get:
+      tags: [workflows]
+      summary: Get the resolved, versioned spec
+      responses:
+        '200':
+          description: The spec
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Spec' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+
+  /api/v1/workflows/{id}/artifacts:
+    parameters:
+      - $ref: '#/components/parameters/WorkflowId'
+    get:
+      tags: [workflows]
+      summary: List generated code artifacts
+      responses:
+        '200':
+          description: The generated files
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  artifacts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Artifact' }
+                  download_url: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+
+  /api/v1/workflows/{id}/test-report:
+    parameters:
+      - $ref: '#/components/parameters/WorkflowId'
+    get:
+      tags: [workflows]
+      summary: Get the Reliability Engine test report
+      responses:
+        '200':
+          description: The test report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TestReport' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+
+  /api/v1/workflows/{id}/publish:
+    parameters:
+      - $ref: '#/components/parameters/WorkflowId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [workflows]
+      summary: Push the generated workflow to a GitHub repo
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PublishRequest' }
+      responses:
+        '200':
+          description: Published
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workflow' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+        '422':
+          description: No GITHUB_TOKEN configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  parameters:
+    WorkflowId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^wf_' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string }
+      description: Re-sending the same key returns the original result instead of duplicating the operation.
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid API key
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: No such resource for this key
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    ValidationError:
+      description: Malformed body or a value failed a constraint
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    InvalidState:
+      description: Operation not valid in the workflow's current state
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    RateLimited:
+      description: Too many requests
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Seconds until the limit resets
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    UpstreamError:
+      description: A model provider or GitHub call failed; safe to retry
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  schemas:
+    Health:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+        version: { type: string, example: 1.0.0 }
+        checks:
+          type: object
+          additionalProperties: { type: string }
+
+    WorkflowState:
+      type: string
+      enum: [ingesting, needs_clarification, generating, generated, testing, tested, test_failed, publishing, published, error]
+
+    Workflow:
+      type: object
+      properties:
+        id: { type: string, example: wf_9f2a7c1b }
+        state: { $ref: '#/components/schemas/WorkflowState' }
+        prompt: { type: string }
+        spec_version: { type: [integer, "null"] }
+        open_questions: { type: integer }
+        test_report: { oneOf: [ { $ref: '#/components/schemas/TestReport' }, { type: "null" } ] }
+        repo_url: { type: [string, "null"] }
+        commit_sha: { type: [string, "null"] }
+        error: { type: [object, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, state, prompt]
+
+    CreateWorkflowRequest:
+      type: object
+      properties:
+        prompt: { type: string, minLength: 1, maxLength: 4000 }
+        interactive: { type: boolean, default: true }
+        auto_publish: { type: boolean, default: false }
+        repo: { $ref: '#/components/schemas/PublishRequest' }
+      required: [prompt]
+
+    Question:
+      type: object
+      properties:
+        id: { type: string }
+        text: { type: string }
+        field: { type: string }
+        kind: { type: string, enum: [free_text, single_choice, multi_choice, boolean, number] }
+        options:
+          type: array
+          items: { type: string }
+        required: { type: boolean }
+
+    AnswersRequest:
+      type: object
+      properties:
+        answers:
+          type: array
+          items:
+            type: object
+            properties:
+              question_id: { type: string }
+              value: {}
+            required: [question_id, value]
+      required: [answers]
+
+    Spec:
+      type: object
+      properties:
+        spec_version: { type: integer }
+        name: { type: string }
+        steps:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              agent: { type: string }
+              inputs: { type: object, additionalProperties: true }
+        assumptions:
+          type: array
+          items: { type: string }
+        budgets:
+          type: object
+          properties:
+            max_latency_ms: { type: integer }
+            max_cost_usd: { type: number }
+
+    Artifact:
+      type: object
+      properties:
+        path: { type: string }
+        bytes: { type: integer }
+        sha256: { type: string }
+
+    TestReport:
+      type: object
+      properties:
+        passed: { type: boolean }
+        suites: { type: object, additionalProperties: true }
+        static_analysis: { type: object, additionalProperties: true }
+        coverage_percent: { type: number }
+        duration_seconds: { type: number }
+
+    PublishRequest:
+      type: object
+      properties:
+        name: { type: string }
+        private: { type: boolean, default: true }
+        description: { type: string }
+
+    Agent:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        capabilities: { type: array, items: { type: string } }
+        inputs: { type: array, items: { type: string } }
+        outputs: { type: array, items: { type: string } }
+        provider: { type: string }
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: VALIDATION_ERROR }
+            message: { type: string }
+            field: { type: string }
+          required: [code, message]
+      required: [error]
