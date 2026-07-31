@@ -1,4 +1,4 @@
-// Flat ESLint config (ESLint 9). Minimal, unopinionated: catch real bugs, stay
+// Flat ESLint config (ESLint 10). Minimal, unopinionated: catch real bugs, stay
 // out of style debates (formatting is left to the editor).
 export default [
   {
@@ -9,7 +9,7 @@ export default [
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
     rules: {
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', ignoreRestSiblings: true }],
       'no-undef': 'off',
       eqeqeq: ['warn', 'smart'],
     },
