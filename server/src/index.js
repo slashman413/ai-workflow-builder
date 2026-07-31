@@ -15,11 +15,9 @@ const DB_FILE = process.env.DB_FILE ?? './data/app.db';
 
 function makeRepos() {
   if (process.env.USE_MEMORY === '1') {
-    // eslint-disable-next-line no-console
     console.log('[db] using in-memory repositories (non-persistent)');
     return createMemoryRepos();
   }
-  // eslint-disable-next-line no-console
   console.log(`[db] using SQLite at ${DB_FILE}`);
   mkdirSync(dirname(DB_FILE), { recursive: true });
   const { projects, workflows } = createSqliteRepos(DB_FILE);
@@ -28,6 +26,5 @@ function makeRepos() {
 
 const app = createApp(makeRepos());
 app.listen(PORT, () => {
-  // eslint-disable-next-line no-console
   console.log(`ai-workflow-builder API listening on http://localhost:${PORT}`);
 });
