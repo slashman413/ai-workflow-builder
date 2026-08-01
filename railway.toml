@@ -1,0 +1,31 @@
+# railway.toml — Railway deployment manifest for the ai-workflow-builder API.
+#
+# Alternative host to fly.toml (Option B in the Architecture Plan). Railway
+# builds the same Dockerfile and runs the Express API. SQLite persistence
+# requires a mounted Railway volume at /data so state survives redeploys —
+# attach one in the service settings (Railway volumes are configured in the
+# dashboard, not this file) and it will be mounted at DB_FILE's directory.
+#
+# First-time setup (run once, outside CI):
+#   railway init
+#   railway up
+#   # then add a volume mounted at /data in the service settings
+
+[build]
+  builder = "DOCKERFILE"
+  dockerfilePath = "Dockerfile"
+
+[deploy]
+  # node:index boots, applies pending migrations, then serves the API.
+  startCommand = "node server/src/index.js"
+  # Restart on crash rather than leaving the machine down.
+  restartPolicyType = "ON_FAILURE"
+  restartPolicyMaxRetries = 3
+  # Application-level liveness check (router is mounted at /api).
+  healthcheckPath = "/api/health"
+  healthcheckTimeout = 30
+
+[env]
+  PORT = "4000"
+  NODE_ENV = "production"
+  DB_FILE = "/data/app.db"

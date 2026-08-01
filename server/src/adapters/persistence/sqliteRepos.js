@@ -9,31 +9,21 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS projects (
-  id         TEXT PRIMARY KEY,
-  prompt     TEXT NOT NULL,
-  answers    TEXT NOT NULL DEFAULT '{}',
-  spec       TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS workflows (
-  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
-  workflow   TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-`;
+import { runMigrations } from './migrate.js';
 
 /**
  * @param {string} [filename] Path to the db file, or ':memory:' for ephemeral.
+ * @param {object} [opts]
+ * @param {(msg: string) => void} [opts.log] Progress sink for the migration runner.
  * @returns {{ db: import('node:sqlite').DatabaseSync, projects: any, workflows: any }}
  */
-export function createSqliteRepos(filename = ':memory:') {
+export function createSqliteRepos(filename = ':memory:', { log } = {}) {
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA foreign_keys = ON;');
-  db.exec(SCHEMA);
+  // Schema lives in server/migrations/*.sql; the runner applies pending files
+  // once, in order. This is the single source of schema truth for both the
+  // running server and the in-memory test databases.
+  runMigrations(db, log ? { log } : undefined);
 
   const projectRepo = {
     create({ prompt, answers = {}, spec = null }) {

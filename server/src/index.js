@@ -20,7 +20,8 @@ function makeRepos() {
   }
   console.log(`[db] using SQLite at ${DB_FILE}`);
   mkdirSync(dirname(DB_FILE), { recursive: true });
-  const { projects, workflows } = createSqliteRepos(DB_FILE);
+  // Apply pending schema migrations at boot before serving traffic.
+  const { projects, workflows } = createSqliteRepos(DB_FILE, { log: (m) => console.log(m) });
   return { projects, workflows };
 }
 

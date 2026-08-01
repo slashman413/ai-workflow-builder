@@ -19,3 +19,8 @@ Thumbs.db
 # Testing coverage
 coverage/
 .nyc_output/
+
+# Databases (runtime persistence — never commit)
+server/data/*.db
+*.db
+app.db

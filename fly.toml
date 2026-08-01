@@ -1,0 +1,50 @@
+# fly.toml — deployment manifest for the ai-workflow-builder API.
+#
+# Serves api.workflow-builders.com. The SQLite file lives on a persistent Fly
+# volume (`data`) mounted at /data so project/workflow state survives deploys
+# and restarts. See ARCHITECTURE for the Cloudflare-fronted topology.
+#
+# First-time setup (run once, outside CI):
+#   fly launch --no-deploy --copy-config
+#   fly volumes create data --size 1 --region iad
+#   fly deploy
+
+app = "ai-workflow-builder-api"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "4000"
+  NODE_ENV = "production"
+  DB_FILE = "/data/app.db"
+
+# Persistent storage for the SQLite database.
+[mounts]
+  source = "data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+  # Application-level health check against the liveness route.
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "3s"
+    grace_period = "5s"
+    method = "GET"
+    path = "/api/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
