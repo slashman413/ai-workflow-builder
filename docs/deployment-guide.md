@@ -113,5 +113,17 @@ deploy jobs — which are gated on `push` to `main` — require them.
   unreachable, so the container `HEALTHCHECK` and Fly checks restart or fail the instance over.
 - **Backups:** the entire state is the SQLite file on the volume. Snapshot the volume (Fly volume
   snapshots) or copy `/data/app.db` out on a schedule.
+- **Ecosystem catalog sync (nightly):** the Agent Marketplace and Cognitive Lenses are mirrored
+  from pinned upstreams (`slashman413/agency-agents` fork, `alchaincyf/nuwa-skill`) by
+  `server/src/cli/sync-catalogs.js`. The pipeline is fetch → parse → validate → transactional
+  install; every success writes an immutable snapshot and every failure records a `failed` version
+  row while the last-good catalog stays live, so a broken upstream can never take the site down.
+  Run it nightly from the API host (or via the container's cron service):
+  `0 3 * * *  cd /srv/ai-workflow-builder && node server/src/cli/sync-catalogs.js --catalog all`
+  Pin an immutable commit instead of tracking `main` with `--ref <full-sha>` (per-catalog pins
+  require one invocation per catalog). `--dry-run` validates without writing; `--restore <id>`
+  rolls back to a stored good snapshot; `--from-bundle` installs the bundled fixtures offline.
+  First boot autoseeds from the bundle (`CATALOG_AUTOSEED=0` disables) so the marketplace works
+  before any sync.
 - **Upgrades:** push to `main`; CI rebuilds and redeploys both halves. Schema migrations in
   `server/migrations/` are applied automatically at boot before traffic is served.

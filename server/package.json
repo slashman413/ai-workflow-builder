@@ -19,6 +19,7 @@
     "@clerk/backend": "^3.15.0",
     "@libsql/client": "^0.17.4",
     "express": "^4.19.2",
+    "tar": "^7.5.22",
     "yaml": "^2.9.0"
   },
   "devDependencies": {

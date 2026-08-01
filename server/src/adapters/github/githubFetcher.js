@@ -18,9 +18,9 @@
  * SKILL.md, references/*.md and examples/<name>/{SKILL,FIDELITY}.md.
  */
 
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import * as tar from 'tar';
 import { EXCLUDED_DIRS } from '../../domain/catalog/agencyAgents.js';
 
@@ -39,7 +39,8 @@ export const CATALOG_SOURCES = Object.freeze({
 });
 
 const MAX_SINGLE_FILE_BYTES = 2_000_000;
-const MAX_TOTAL_BYTES = 30_000_000;
+const MAX_TOTAL_BYTES = 30_000_000; // extracted TEXT cap — the content-level guard
+const MAX_TARBALL_BYTES = 100_000_000; // download guard — repos contain images/binaries too
 
 /**
  * Fetch a pinned ref of a catalog repo and read its text files.
@@ -73,35 +74,64 @@ export async function fetchCatalogTarball(catalog, { ref, source, tmpBase, log =
     }
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.byteLength === 0) throw new Error('Downloaded tarball is empty.');
-    if (buf.byteLength > MAX_TOTAL_BYTES) throw new Error(`Tarball too large (${buf.byteLength} bytes).`);
-    await writeFile(tgzPath, buf);
-
-    const extractDir = join(dir, 'tree');
-    await tar.x({ file: tgzPath, cwd: extractDir, strict: true });
-
-    const entries = await readdir(extractDir, { withFileTypes: true });
-    const root = entries.find((e) => e.isDirectory())?.name;
-    if (!root) throw new Error('Tarball has no root directory.');
-
-    // Immutable-pin verification: a codeload tarball of a full SHA names its
-    // root `<repo>-<first 7 of sha>`. A mismatch means the ref moved or the
-    // archive is not what we pinned.
-    if (/^[0-9a-f]{40}$/i.test(refName)) {
-      const expectedPrefix = `${repo}-${refName.slice(0, 7)}`;
-      if (root !== expectedPrefix) {
-        throw new Error(
-          `Pinned-ref verification failed: archive root "${root}" does not match expected "${expectedPrefix}" ` +
-            `— the pinned commit ${refName} no longer resolves as fetched.`,
-        );
-      }
+    if (buf.byteLength > MAX_TARBALL_BYTES) {
+      throw new Error(`Tarball too large (${buf.byteLength} bytes).`);
     }
-
-    const base = join(extractDir, root);
-    const files = await walkTextFiles(base, catalog, log);
-    return { version: refName, ref: refName, files, extractedDir: base };
+    await writeFile(tgzPath, buf);
+    return await extractCatalogTarball(catalog, tgzPath, { ref: refName, log });
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/**
+ * Extract a downloaded tarball and read the text files a catalog cares about.
+ * Split out from the network fetch so the sandboxed extraction + pin
+ * verification path is testable without the network (catalogSync.test.js
+ * packs a fixture into a real tarball and exercises this directly).
+ *
+ * @param {string} catalog
+ * @param {string} tgzPath  Path to a `.tar.gz` archive on disk.
+ * @param {object} [opts]
+ * @param {string} [opts.ref] Ref that was fetched — a full 40-char SHA is
+ *   verified against the archive root directory name.
+ * @param {(msg: string) => void} [opts.log]
+ * @returns {Promise<{ version: string, files: Record<string,string>,
+ *                      extractedDir: string, ref: string }>}
+ */
+export async function extractCatalogTarball(catalog, tgzPath, { ref: refName, log = () => {} } = {}) {
+  const cfg = CATALOG_SOURCES[catalog];
+  if (!cfg) throw new Error(`Unknown catalog "${catalog}"`);
+  const { repo } = cfg;
+  const dir = dirname(tgzPath);
+  const extractDir = join(dir, 'tree');
+  await mkdir(extractDir, { recursive: true });
+  await tar.x({ file: tgzPath, cwd: extractDir, strict: true });
+
+  const entries = await readdir(extractDir, { withFileTypes: true });
+  const root = entries.find((e) => e.isDirectory())?.name;
+  if (!root) throw new Error('Tarball has no root directory.');
+
+  // Immutable-pin verification: a codeload tarball of a full SHA names its
+  // root `<repo>-<first 7 of sha>` — but in the wild GitHub also uses the
+  // FULL 40-char SHA (`<repo>-<full sha>`), depending on how the ref was
+  // requested. Accept either, but never a root that does not begin with the
+  // pinned commit's prefix: a rewritten/moved upstream is detected here,
+  // before a single byte is parsed.
+  if (/^[0-9a-f]{40}$/i.test(refName ?? '')) {
+    const prefix = `${repo}-${refName.slice(0, 7)}`;
+    const full = `${repo}-${refName}`;
+    if (root !== prefix && root !== full) {
+      throw new Error(
+        `Pinned-ref verification failed: archive root "${root}" does not match "${prefix}" or "${full}" ` +
+          `— the pinned commit ${refName} no longer resolves as fetched.`,
+      );
+    }
+  }
+
+  const base = join(extractDir, root);
+  const files = await walkTextFiles(base, catalog, log);
+  return { version: refName, ref: refName, files, extractedDir: base };
 }
 
 /**
