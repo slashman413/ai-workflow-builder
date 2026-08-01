@@ -1,0 +1,10 @@
+# Cloudflare Pages SPA fallback (_redirects)
+#
+# Every unmatched path serves index.html with a 200 so client-side routing
+# works on the edge CDN: deep links, refreshes, and paths the React app owns
+# (e.g. /projects/<id>) never hit a 404. Hashed assets under /assets/* are
+# real files and are matched before this catch-all.
+#
+# Order matters: Cloudflare applies the FIRST matching rule, so this
+# catch-all sits last. See https://developers.cloudflare.com/pages/configuration/serving-pages/
+/* /index.html 200

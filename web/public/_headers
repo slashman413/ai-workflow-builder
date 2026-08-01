@@ -1,0 +1,18 @@
+# Cloudflare Pages security headers (_headers)
+#
+# Applied to the SPA origin only. The API (api.workflow-builders.com) has its
+# own CORS policy in the Express app (server/src/adapters/http/cors.js).
+#
+# CSP is deliberately NOT set here: Clerk's hosted UIs and SDK load from
+# *.clerk.com, and a wrong CSP silently breaks sign-in in production. Add one
+# only after auditing Clerk's asset origins.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+
+# Vite emits content-hashed filenames — safe to cache on the edge for a year.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

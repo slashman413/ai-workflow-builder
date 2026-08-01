@@ -72,7 +72,9 @@ no CORS to configure locally.
 | `DB_FILE` | `./data/app.db` | SQLite database path (auto-created) |
 | `USE_MEMORY` | — | Set to `1` to use the non-persistent in-memory repo |
 | `NODE_ENV` | — | `production` tightens the CORS allow-list |
-| `CORS_ORIGINS` | — | Comma-separated origin allow-list override |
+| `CORS_ORIGINS` | — | Comma-separated origin allow-list override (defaults: production → `https://workflow-builders.com`; dev → localhost Vite origins). `https://*.pages.dev` preview deploys and `https://*.workflow-builders.com` subdomains are always honored |
+| `AUTH_MODE` | `test` | `clerk` verifies every request's session JWT with Clerk (`CLERK_SECRET_KEY` required) |
+| `VAULT_KEK` | — | 32-byte base64 envelope key for the LLM key vault (required in production) |
 
 ## The REST API
 
@@ -82,7 +84,7 @@ All endpoints are served under `/api`. The machine-readable contract lives in
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/api/health` | Liveness probe (status, version, uptime) |
+| `GET` | `/api/health` | Liveness + readiness probe (status, version, uptime, DB check; 503 when DB is down) |
 | `POST` | `/api/projects` | Create a project from a prompt |
 | `GET` | `/api/projects` | List projects |
 | `GET` | `/api/projects/{id}` | Fetch a project |
@@ -129,7 +131,11 @@ Production runs as two independently deployed halves:
 
 Both halves ship from the CI/CD pipeline in [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml)
 on push to `main`, gated behind a green lint/test/build. Container config:
-[`fly.toml`](fly.toml), [`railway.toml`](railway.toml). Full runbook:
+[`fly.toml`](fly.toml), [`railway.toml`](railway.toml). SPA config for the Pages
+edge: [`wrangler.toml`](wrangler.toml) (project definition),
+[`web/public/_redirects`](web/public/_redirects) (`/* /index.html 200` SPA
+fallback), and [`web/public/_headers`](web/public/_headers) (security headers
++ asset caching) — both copied into the build by Vite. Full runbook:
 [`docs/deployment-guide.md`](docs/deployment-guide.md).
 
 ## Documentation

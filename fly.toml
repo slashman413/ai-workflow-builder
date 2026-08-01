@@ -7,7 +7,16 @@
 # First-time setup (run once, outside CI):
 #   fly launch --no-deploy --copy-config
 #   fly volumes create data --size 1 --region iad
+#   fly secrets set CLERK_SECRET_KEY=sk_live_... VAULT_KEK=<32-byte base64>
 #   fly deploy
+#
+# Secrets (NEVER in [env] — use `fly secrets set`):
+#   CLERK_SECRET_KEY  required; without it the server refuses to boot when
+#                     AUTH_MODE=clerk (which NODE_ENV=production implies via
+#                     the presence check in src/index.js).
+#   VAULT_KEK         required in production — a 32-byte base64 key for the
+#                     envelope-encrypted LLM key vault. Boot fails without it.
+#   Generate:         node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
 app = "ai-workflow-builder-api"
 primary_region = "iad"

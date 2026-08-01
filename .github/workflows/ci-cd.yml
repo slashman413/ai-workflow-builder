@@ -43,8 +43,10 @@ jobs:
   deploy-web:
     name: Deploy SPA to Cloudflare Pages
     # Only deploy real pushes to main, never PRs, and only after CI is green.
+    # The secrets guard keeps the pipeline green until the Pages token/account
+    # are configured (then this job activates automatically).
     needs: ci
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != ''
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -64,6 +66,10 @@ jobs:
         env:
           # The SPA calls the container API on its own origin in production.
           VITE_API_URL: https://api.workflow-builders.com/api
+          # Clerk publishable key (Frontend API key) — enables real session
+          # auth + OAuth in the deployed SPA. Set as a repo secret; without
+          # it the SPA still builds but renders the dev auth shell.
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
 
       - name: Publish to Cloudflare Pages
         uses: cloudflare/pages-action@v1
@@ -76,9 +82,10 @@ jobs:
 
   deploy-api:
     name: Deploy API container to Fly.io
-    # Runs in parallel with deploy-web, gated on the same green CI.
+    # Runs in parallel with deploy-web, gated on the same green CI and the
+    # Fly token being configured.
     needs: ci
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.FLY_API_TOKEN != ''
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

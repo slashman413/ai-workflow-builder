@@ -32,13 +32,35 @@ after(() => server?.close());
 
 const json = (r) => r.json();
 
-maybe('health check responds with status, version and uptime', async () => {
+maybe('health check responds with status, version, uptime and DB readiness', async () => {
   const r = await fetch(`${base}/health`);
   assert.equal(r.status, 200);
   const body = await json(r);
   assert.equal(body.status, 'ok');
   assert.ok(body.version, 'health payload exposes a service version');
   assert.equal(typeof body.uptime, 'number');
+  assert.equal(body.db.ok, true, 'health payload reports database readiness');
+  assert.equal(typeof body.db.latencyMs, 'number');
+});
+
+maybe('health returns 503 when the database is unreachable', async () => {
+  const repos = createMemoryRepos();
+  repos.ping = () => ({ ok: false, error: 'disk on fire' });
+  const app = createApp(repos);
+  const srv = await new Promise((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  const b = `http://127.0.0.1:${srv.address().port}/api`;
+  try {
+    const r = await fetch(`${b}/health`);
+    assert.equal(r.status, 503);
+    const body = await json(r);
+    assert.equal(body.status, 'degraded');
+    assert.equal(body.db.ok, false);
+    assert.ok(body.db.error);
+  } finally {
+    srv.close();
+  }
 });
 
 maybe('CORS pre-flight is answered for a dev origin', async () => {

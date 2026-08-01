@@ -1,8 +1,14 @@
 /**
  * routes.js — the HTTP adapter. Translates requests into service calls and
  * AppErrors into status codes. It holds NO business logic; every decision lives
- * in ProjectService. Controllers never touch repositories directly (see the
- * architect rule on not bypassing use cases).
+ * in ProjectService / VaultService. Controllers never touch repositories
+ * directly (see the architect rule on not bypassing use cases).
+ *
+ * Tenant isolation: every secured route is wrapped by `requireOrg` (which
+ * verifies the Clerk session JWT and binds `req.orgId`) and a `requireRole`
+ * gate. Controllers pass `req.orgId` into every service call — the request's
+ * tenant identity is never derived from the URL, the body, or headers that a
+ * client controls.
  */
 
 import { readFileSync } from 'node:fs';
@@ -22,9 +28,15 @@ const SERVICE = (() => {
 })();
 
 /**
- * @param {import('../../application/projectService.js').ProjectService} service
+ * @param {object} deps
+ * @param {import('../../application/projectService.js').ProjectService} deps.service
+ * @param {import('../../application/vaultService.js').VaultService} deps.vaultService
+ * @param {import('./auth.js').createAuth} deps.requireOrg
+ * @param {import('./auth.js').createAuth} deps.requireRole
+ * @param {() => Promise<{ok: boolean, latencyMs?: number, error?: string}>} deps.checkHealth
+ *   Live storage readiness probe (see app.js).
  */
-export function createRouter(service) {
+export function createRouter({ service, vaultService, requireOrg, requireRole, checkHealth }) {
   const router = Router();
 
   const wrap = (fn) => (req, res) => {
@@ -42,36 +54,63 @@ export function createRouter(service) {
     }
   };
 
-  // Liveness/diagnostics probe for the container orchestrator (Fly checks) and
-  // Cloudflare edge. Returns status plus service identity and uptime so an
-  // operator can tell *which* build answered and how long it has been up.
-  router.get('/health', (_req, res) =>
-    res.json({
-      status: 'ok',
+  // Liveness/readiness probe — deliberately public (no org binding): the
+  // orchestrator, Docker HEALTHCHECK, Fly.io/Railway rolling deploys, and the
+  // Cloudflare edge must be able to check it without a session. Answers 503
+  // (status `degraded`) when the database is unreachable so the platform
+  // restarts or fails the instance over instead of routing traffic to a
+  // half-dead pod.
+  router.get('/health', async (_req, res) => {
+    let db;
+    try {
+      db = await checkHealth();
+    } catch (err) {
+      db = { ok: false, error: err.message };
+    }
+    res.status(db.ok ? 200 : 503).json({
+      status: db.ok ? 'ok' : 'degraded',
       service: SERVICE.name,
       version: SERVICE.version,
       uptime: Math.round(process.uptime()),
       timestamp: new Date().toISOString(),
-    }),
-  );
+      db,
+    });
+  });
+
+  // --- Secured surface: everything below the health probe requires a valid
+  // --- org-bound Clerk session (`requireOrg`) plus the role gate. ---------
+  //
+  // RBAC matrix:
+  //   viewer    → read-only workspace (projects, grill, workflow)
+  //   architect → + create projects, answer grill, scaffold/save workflows
+  //   owner     → + delete projects (and vault entries)
+  //   vault     → architect+ reads/writes; owner-only deletes.
 
   // Projects
-  router.post('/projects', wrap((req) => withStatus(service.createProject(req.body?.prompt), 201)));
-  router.get('/projects', wrap(() => service.listProjects()));
-  router.get('/projects/:id', wrap((req) => service.getProject(req.params.id)));
-  router.delete('/projects/:id', wrap((req) => service.deleteProject(req.params.id)));
+  router.post('/projects', requireOrg, requireRole('architect'), wrap((req) => withStatus(service.createProject(req.orgId, req.body?.prompt), 201)));
+  router.get('/projects', requireOrg, requireRole('viewer'), wrap((req) => service.listProjects(req.orgId)));
+  router.get('/projects/:id', requireOrg, requireRole('viewer'), wrap((req) => service.getProject(req.orgId, req.params.id)));
+  router.delete('/projects/:id', requireOrg, requireRole('owner'), wrap((req) => service.deleteProject(req.orgId, req.params.id)));
 
   // Grill me
-  router.get('/projects/:id/grill', wrap((req) => service.grill(req.params.id, { deep: req.query.deep === 'true' })));
-  router.post('/projects/:id/answers', wrap((req) => service.answer(req.params.id, req.body?.answers)));
+  router.get('/projects/:id/grill', requireOrg, requireRole('viewer'), wrap((req) => service.grill(req.orgId, req.params.id, { deep: req.query.deep === 'true' })));
+  router.post('/projects/:id/answers', requireOrg, requireRole('architect'), wrap((req) => service.answer(req.orgId, req.params.id, req.body?.answers)));
 
   // Workflow builder
   router.post(
     '/projects/:id/workflow/scaffold',
-    wrap((req) => withStatus(service.scaffoldWorkflow(req.params.id, { force: req.body?.force === true }), 201)),
+    requireOrg,
+    requireRole('architect'),
+    wrap((req) => withStatus(service.scaffoldWorkflow(req.orgId, req.params.id, { force: req.body?.force === true }), 201)),
   );
-  router.put('/projects/:id/workflow', wrap((req) => service.saveWorkflow(req.params.id, req.body?.workflow)));
-  router.get('/projects/:id/workflow', wrap((req) => service.getWorkflow(req.params.id)));
+  router.put('/projects/:id/workflow', requireOrg, requireRole('architect'), wrap((req) => service.saveWorkflow(req.orgId, req.params.id, req.body?.workflow)));
+  router.get('/projects/:id/workflow', requireOrg, requireRole('viewer'), wrap((req) => service.getWorkflow(req.orgId, req.params.id)));
+
+  // Envelope-encrypted LLM key vault (never returns plaintext — see VaultService)
+  router.get('/vault', requireOrg, requireRole('architect'), wrap((req) => vaultService.list(req.orgId)));
+  router.post('/vault', requireOrg, requireRole('architect'), wrap((req) => withStatus(vaultService.store(req.orgId, req.body), 201)));
+  router.get('/vault/:id', requireOrg, requireRole('architect'), wrap((req) => vaultService.get(req.orgId, req.params.id)));
+  router.delete('/vault/:id', requireOrg, requireRole('owner'), wrap((req) => vaultService.remove(req.orgId, req.params.id)));
 
   return router;
 }

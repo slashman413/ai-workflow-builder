@@ -1,0 +1,24 @@
+# wrangler.toml — Cloudflare Pages configuration for the workflow-builders.com SPA.
+#
+# The frontend is a static React/Vite build (web/dist) served from the Pages
+# edge CDN; the API runs separately on api.workflow-builders.com (Fly.io /
+# Railway — see fly.toml / railway.toml). This file is the declarative Pages
+# project config and is used by `wrangler pages deploy`:
+#
+#   npx wrangler pages deploy web/dist --project-name ai-workflow-builder-web
+#
+# CI deploys through cloudflare/pages-action (see .github/workflows/ci-cd.yml),
+# which builds with VITE_API_URL and uploads web/dist directly — it does not
+# read this file, so keep the two in sync (same project name, same output dir).
+#
+# SPA routing: web/public/_redirects carries the `/* /index.html 200` fallback
+# so client-side routes never 404 on the edge. Security headers live in
+# web/public/_headers. Both are copied into the build output by Vite.
+
+name = "ai-workflow-builder-web"
+compatibility_date = "2026-08-01"
+pages_build_output_dir = "web/dist"
+
+# No Workers/Pages Functions yet: the SPA is fully static and talks to the
+# container API on api.workflow-builders.com. If edge functions are added
+# later, declare them here ([functions] / [vars] / [[kv_namespaces]]).

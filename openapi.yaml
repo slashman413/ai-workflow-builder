@@ -29,11 +29,23 @@ info:
     (repeat until `ready: true`) → `POST .../workflow/scaffold` →
     `PUT .../workflow` (edit + validate).
 
-    ## Authentication
-    The Express service itself is unauthenticated. In production, user auth and
-    org scoping are enforced at the edge (Cloudflare + Clerk) in front of
-    `api.workflow-builders.com`; see docs/ARCHITECTURE. Endpoints below reflect
-    the service contract, not the edge policy.
+    ## Authentication & tenant isolation
+    Every endpoint except `/api/health` requires a Clerk session JWT sent as
+    `Authorization: Bearer <session token>`. The server verifies the token
+    cryptographically (`@clerk/backend`), extracts the `org_id` claim, and
+    scopes every query to that organization — cross-tenant access to a
+    resource behaves exactly like a missing resource (HTTP 404). RBAC:
+    `org:owner`/`org:admin` = Owner, `org:architect`/`org:editor` = Architect,
+    `org:viewer`/`org:member` = Viewer. Writes require Architect+, deletes
+    require Owner, and the key vault is Architect+ for all operations.
+
+    ## Key vault
+    `POST /api/vault` stores LLM provider keys (OpenAI/Anthropic/Gemini/DeepSeek) with
+    envelope encryption: a per-organization Data Encryption Key (DEK) wraps the
+    provider key, and the DEK itself is wrapped by an environment Key
+    Encryption Key (KEK, `VAULT_KEK`). Read endpoints return **masked labels
+    only** (`maskedKey` like `sk-abc…wxyz`); plaintext keys and wrapped
+    material never appear in any response.
 
 servers:
   - url: http://localhost:4000
@@ -50,16 +62,36 @@ tags:
     description: The deterministic Grill-Me clarification loop
   - name: workflow
     description: Compiled workflow scaffold, validation, and persistence
+  - name: vault
+    description: Envelope-encrypted LLM provider key vault
+
+# Everything except /api/health requires a Clerk session JWT (see
+# Authentication above). /api/health overrides with `security: []`.
+security:
+  - bearerAuth: []
 
 paths:
   /api/health:
     get:
       tags: [system]
-      summary: Liveness probe
+      summary: Liveness and readiness probe
       operationId: health
+      security: []
+      description: >
+        Returns operational status, service identity, process uptime, and a
+        live database readiness check (a `SELECT 1` round-trip on the SQLite
+        adapter). Responds 200 while the service can serve traffic and 503
+        (status `degraded`) when the database is unreachable, so orchestrators
+        (Docker HEALTHCHECK, Fly.io/Railway rolling deploys) can fail over or
+        restart the instance. Deliberately public — no session required.
       responses:
         '200':
-          description: Service is up.
+          description: Service is up and the database answers.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Service is up but the database is unreachable.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
@@ -283,7 +315,107 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/vault:
+    get:
+      tags: [vault]
+      summary: List the org's stored provider keys (masked labels only)
+      operationId: listVaultKeys
+      description: >
+        Returns masked labels and metadata for every vault entry in the
+        caller's organization. Plaintext keys and wrapped key material are
+        never returned.
+      responses:
+        '200':
+          description: Masked vault entries, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/VaultEntry' }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [vault]
+      summary: Store a provider API key (envelope-encrypted)
+      operationId: storeVaultKey
+      description: >
+        Encrypts the provider key with the org's Data Encryption Key (wrapped
+        by the environment KEK) and stores it. The response contains only the
+        masked preview.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, apiKey]
+              properties:
+                provider:
+                  type: string
+                  enum: [openai, anthropic, gemini, deepseek]
+                  description: LLM provider.
+                label:
+                  type: string
+                  description: Human-readable label (defaults to the provider name).
+                apiKey:
+                  type: string
+                  description: The provider API key. Stored encrypted; never returned.
+      responses:
+        '201':
+          description: Stored. Response carries masked metadata only.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VaultEntry' }
+        '400':
+          description: 'Invalid provider or missing/oversized apiKey (`INVALID_PROVIDER` / `INVALID_API_KEY`).'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/vault/{id}:
+    parameters:
+      - $ref: '#/components/parameters/VaultEntryId'
+    get:
+      tags: [vault]
+      summary: Get one vault entry (masked)
+      operationId: getVaultKey
+      responses:
+        '200':
+          description: Masked vault entry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VaultEntry' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [vault]
+      summary: Delete a vault entry (Owner only)
+      operationId: deleteVaultKey
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: boolean, const: true }
+                  id: { type: string }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Clerk session token (verified against Clerk's JWKS).
+
   parameters:
     ProjectId:
       name: id
@@ -291,10 +423,28 @@ components:
       required: true
       schema: { type: string, format: uuid }
       description: Project id (UUID).
+    VaultEntryId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: Vault entry id (`vk_…`).
 
   responses:
     NotFound:
-      description: The referenced project does not exist (`NOT_FOUND`).
+      description: The referenced resource does not exist in this org (`NOT_FOUND`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid session token (`UNAUTHENTICATED`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: >
+        Authenticated but not permitted — either no org binding (`ORG_REQUIRED`)
+        or insufficient role for the operation (`FORBIDDEN`).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -303,12 +453,20 @@ components:
     Health:
       type: object
       properties:
-        status: { type: string, const: ok }
+        status: { type: string, enum: [ok, degraded], example: ok }
         service: { type: string, example: '@ai-workflow-builder/server' }
         version: { type: string, example: 0.1.0 }
         uptime: { type: integer, description: Process uptime in whole seconds., example: 42 }
         timestamp: { type: string, format: date-time }
-      required: [status]
+        db:
+          type: object
+          description: Live database readiness check.
+          properties:
+            ok: { type: boolean, description: Whether the storage layer answered a ping. }
+            latencyMs: { type: number, description: Ping round-trip in milliseconds (0 for in-memory). }
+            error: { type: string, description: Present only when ok is false. }
+          required: [ok]
+      required: [status, db]
 
     Error:
       type: object
@@ -423,3 +581,20 @@ components:
           items: { type: string }
           description: Ids of nodes this node depends on. Must resolve; graph must be acyclic.
       required: [id, type]
+
+    VaultEntry:
+      type: object
+      description: >
+        Public (masked) view of a stored provider key. Contains only labels and
+        metadata — never the plaintext key and never the wrapped material.
+      properties:
+        id: { type: string, example: vk_9f1c… }
+        provider:
+          type: string
+          enum: [openai, anthropic, gemini, deepseek]
+        label: { type: string }
+        keyHandle: { type: string, example: kh_2b4d… }
+        maskedKey: { type: string, example: sk-proj-ab…9f2c }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, provider, label, keyHandle, maskedKey]

@@ -108,8 +108,9 @@ deploy jobs — which are gated on `push` to `main` — require them.
 
 ## Operations
 
-- **Health:** `GET /api/health` returns status, service name, build version, and uptime. The
-  container `HEALTHCHECK` and Fly checks both hit it.
+- **Health:** `GET /api/health` returns status, service name, build version, uptime, and a live
+  database readiness check (`db.ok`); it answers 503 with `status: degraded` when the database is
+  unreachable, so the container `HEALTHCHECK` and Fly checks restart or fail the instance over.
 - **Backups:** the entire state is the SQLite file on the volume. Snapshot the volume (Fly volume
   snapshots) or copy `/data/app.db` out on a schedule.
 - **Upgrades:** push to `main`; CI rebuilds and redeploys both halves. Schema migrations in

@@ -4,8 +4,12 @@ import React, { useState } from 'react';
  * Feature 2: the "grill me" panel. Renders the current batch of clarifying
  * questions, tracks a coverage bar, and only enables "Build" once the spec is
  * ready (though the user can force-build an incomplete spec).
+ *
+ * `readOnly` (Viewer role): the questions are shown but the answer form and
+ * the build action are hidden — the backend rejects those writes for
+ * viewers anyway, so the UI simply never offers them.
  */
-export function GrillPanel({ grill, onSubmit, onBuild }) {
+export function GrillPanel({ grill, onSubmit, onBuild, readOnly = false }) {
   const [draft, setDraft] = useState({});
 
   const pct = Math.round((grill.coverage ?? 0) * 100);
@@ -22,6 +26,15 @@ export function GrillPanel({ grill, onSubmit, onBuild }) {
 
       {grill.questions.length === 0 ? (
         <p className="done">No open questions — your spec is ready.</p>
+      ) : readOnly ? (
+        <ul className="readonly-questions">
+          {grill.questions.map((q) => (
+            <li key={q.id}>
+              {q.prompt}
+              {q.critical && <em className="req"> *</em>}
+            </li>
+          ))}
+        </ul>
       ) : (
         <form
           onSubmit={(e) => {
@@ -49,11 +62,13 @@ export function GrillPanel({ grill, onSubmit, onBuild }) {
         </form>
       )}
 
-      <div className="actions">
-        <button className={grill.ready ? 'primary' : 'ghost'} onClick={onBuild}>
-          {grill.ready ? '3. Build workflow →' : 'Force build (spec incomplete)'}
-        </button>
-      </div>
+      {!readOnly && (
+        <div className="actions">
+          <button className={grill.ready ? 'primary' : 'ghost'} onClick={onBuild}>
+            {grill.ready ? '3. Build workflow →' : 'Force build (spec incomplete)'}
+          </button>
+        </div>
+      )}
     </section>
   );
 }
