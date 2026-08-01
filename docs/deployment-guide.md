@@ -1,209 +1,116 @@
 # Deployment Guide
 
-This guide shows how to run the `ai-workflow-builder` **service** (the FastAPI app) — for a team, in CI, or in production. If you only want the CLI on your laptop, you don't need any of this; see the [Usage Guide](usage-guide.md).
+How to ship `ai-workflow-builder` to production. The app deploys as **two independent halves**
+following a Cloudflare-native hybrid model:
 
-**Audience:** an engineer deploying and operating the service.
-**You'll cover:** running via Docker, every environment variable, production hardening, health checks, backups, and upgrades.
+- **`workflow-builders.com`** — the React SPA on **Cloudflare Pages** (static, edge CDN).
+- **`api.workflow-builders.com`** — the Express API as a **container** on **Fly.io** (or Railway),
+  with SQLite persisted to a mounted volume.
 
----
-
-## Architecture at a glance
-
-The service is a single stateless FastAPI process backed by a SQLite database (default) or PostgreSQL. It calls out to:
-
-- **Model providers** (OpenAI / Anthropic / Gemini) for spec resolution and code generation
-- **GitHub** (only when publishing)
-
-Because the process is stateless apart from the database, you can run one container for a small team, or several behind a load balancer for a larger one — as long as they share the same database.
+Both are shipped by the CI/CD pipeline in [`.github/workflows/ci-cd.yml`](../.github/workflows/ci-cd.yml)
+on push to `main`, gated on a green lint/test/build.
 
 ```
-        clients (CLI / HTTP)
-                │
-                ▼
-        ┌───────────────┐        ┌──────────────────┐
-        │  FastAPI app  │ ─────▶ │ model providers  │
-        │ (uvicorn)     │        └──────────────────┘
-        │               │ ─────▶ ┌──────────────────┐
-        └──────┬────────┘        │      GitHub      │
-               ▼                 └──────────────────┘
-        ┌───────────────┐
-        │ DB (SQLite /  │
-        │  PostgreSQL)  │
-        └───────────────┘
+      browser
+        │
+        ▼
+  workflow-builders.com          api.workflow-builders.com
+  ┌────────────────────┐  /api   ┌────────────────────────┐
+  │ Cloudflare Pages   │ ──────▶ │ Express (Fly.io/Railway)│
+  │ (static web/dist)  │         │  + node:sqlite volume   │
+  └────────────────────┘         └────────────────────────┘
 ```
 
 ---
 
-## Option A: Docker (recommended)
+## Part 1 — The API container
 
-### 1. Pull or build the image
+The API is a pure Node 22 service: the only runtime dependency is Express, and persistence is the
+built-in `node:sqlite` (no native module to compile). The production image is defined by the
+repo-root [`Dockerfile`](../Dockerfile) — a multi-stage `node:22-slim` build that ships only the
+`server` workspace and its production deps, runs as the unprivileged `node` user, and declares a
+container health check against `/api/health`.
 
-```bash
-# Build from the repo
-docker build -t ai-workflow-builder:1.0.0 .
-```
+### Environment variables
 
-### 2. Create an env file
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `PORT` | `4000` | Listen port. |
+| `DB_FILE` | `/data/app.db` (image) | SQLite path. Point at the mounted volume. |
+| `NODE_ENV` | `production` | Tightens the CORS allow-list to the canonical domain. |
+| `CORS_ORIGINS` | — | Comma-separated override (e.g. add a staging/preview origin). |
+| `USE_MEMORY` | — | `1` = non-persistent in-memory repo (not for production). |
 
-Create `awb.env` (never commit it):
-
-```env
-# --- required ---
-AWB_API_KEYS=change-me-strong-key-1,change-me-strong-key-2
-OPENAI_API_KEY=sk-...
-# --- optional providers ---
-# ANTHROPIC_API_KEY=...
-# GEMINI_API_KEY=...
-# --- publishing (optional) ---
-GITHUB_TOKEN=ghp_...
-# --- data ---
-AWB_DATABASE_URL=sqlite:////data/awb.db
-```
-
-### 3. Run
+### Build & run locally
 
 ```bash
-docker run -d --name awb \
-  --env-file awb.env \
-  -p 8000:8000 \
-  -v awb-data:/data \
-  ai-workflow-builder:1.0.0
+docker build -t ai-workflow-builder-api .
+docker run --rm -p 4000:4000 -v awb-data:/data ai-workflow-builder-api
+curl http://localhost:4000/api/health
 ```
 
-### 4. Verify
+### Fly.io
+
+Config lives in [`fly.toml`](../fly.toml). First-time setup:
 
 ```bash
-curl http://localhost:8000/health
-# {"status":"ok","version":"1.0.0","checks":{"database":"ok","model_provider":"ok"}}
+fly launch --no-deploy          # or `fly apps create` if the app exists
+fly volumes create awb_data --size 1   # persistent SQLite volume
+fly deploy
 ```
 
-Swagger UI is now at `http://localhost:8000/docs`.
+CI then keeps it deployed automatically: the `deploy-api` job runs `flyctl deploy --remote-only`
+using the `FLY_API_TOKEN` secret. Mount the volume at `/data` so `DB_FILE=/data/app.db` survives
+restarts and redeploys.
 
-### docker-compose (with PostgreSQL)
+### Railway
 
-```yaml
-services:
-  awb:
-    image: ai-workflow-builder:1.0.0
-    env_file: awb.env
-    environment:
-      AWB_DATABASE_URL: postgresql://awb:awb@db:5432/awb
-    ports: ["8000:8000"]
-    depends_on: [db]
-    restart: unless-stopped
-  db:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: awb
-      POSTGRES_PASSWORD: awb
-      POSTGRES_DB: awb
-    volumes: ["awb-pg:/var/lib/postgresql/data"]
-    restart: unless-stopped
-volumes:
-  awb-pg:
-```
+[`railway.toml`](../railway.toml) provides the equivalent config. Point Railway at the repo, attach
+a volume for `/data`, and set the same env vars. Railway builds the Dockerfile directly.
 
 ---
 
-## Option B: Run from source
+## Part 2 — The web SPA (Cloudflare Pages)
 
-For development or a bare-metal host. The project uses **Poetry**.
+The SPA is a static Vite build. In production it must call the API on its own origin, so the build
+injects the API base URL:
 
 ```bash
-git clone https://github.com/slashman413/ai-workflow-builder.git
-cd ai-workflow-builder
-poetry install --no-dev            # or `poetry install` to include dev tools
-
-# initialize the database schema
-poetry run awb db upgrade
-
-# serve
-poetry run uvicorn ai_workflow_builder.api:app --host 0.0.0.0 --port 8000 --workers 4
+VITE_API_URL=https://api.workflow-builders.com/api npm run build
+# output: web/dist/
 ```
 
-Put a real ASGI setup in front for production: run `uvicorn` under a process manager (systemd, supervisor) or use `gunicorn -k uvicorn.workers.UvicornWorker`.
+The `deploy-web` CI job builds with that env var and publishes `web/dist` to Cloudflare Pages via
+`cloudflare/pages-action`, using the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets.
+
+To wire it up once:
+
+1. Create a Cloudflare Pages project named `ai-workflow-builder-web` (Direct Upload / CI).
+2. Add the DNS records: `workflow-builders.com` → the Pages project;
+   `api.workflow-builders.com` → the Fly.io/Railway app.
+3. Add the four repository secrets (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`,
+   `FLY_API_TOKEN`, and — if using Railway — its token).
 
 ---
 
-## Environment variables
+## Required CI secrets
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `AWB_API_KEYS` | **yes** | – | Comma-separated API keys accepted on `/api/v1/*`. Rotate by adding a new key, migrating clients, then removing the old one. |
-| `OPENAI_API_KEY` | one provider required | – | OpenAI key. |
-| `ANTHROPIC_API_KEY` | one provider required | – | Anthropic key. |
-| `GEMINI_API_KEY` | one provider required | – | Google Gemini key. |
-| `AWB_MODEL_PROVIDER` | no | first available | Force a provider: `openai` \| `anthropic` \| `gemini`. |
-| `GITHUB_TOKEN` | for publishing | – | PAT with `repo` scope. Without it, `/publish` returns `422 PUBLISH_TOKEN_MISSING`. |
-| `AWB_DATABASE_URL` | no | `sqlite:////data/awb.db` | SQLAlchemy URL. Use `postgresql://…` for multi-instance deployments. |
-| `AWB_RATE_LIMIT_PER_MINUTE` | no | `60` | Per-key request cap. |
-| `AWB_LOG_LEVEL` | no | `INFO` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR`. |
-| `AWB_CORS_ORIGINS` | no | (none) | Comma-separated allowed origins if calling from a browser. |
-| `AWB_MAX_CONCURRENT_BUILDS` | no | `4` | Max builds running at once; excess are queued. |
+| Secret | Used by |
+|--------|---------|
+| `CLOUDFLARE_API_TOKEN` | `deploy-web` (Pages publish) |
+| `CLOUDFLARE_ACCOUNT_ID` | `deploy-web` |
+| `FLY_API_TOKEN` | `deploy-api` (Fly deploy) |
 
-> **Secrets handling.** All provider keys and `GITHUB_TOKEN` live only in the server's environment. They are never accepted in, or returned by, the API. Store them in your platform's secret manager, not in the image.
+If the secrets are absent, the CI (`lint/test/build`) still runs on every push and PR; only the
+deploy jobs — which are gated on `push` to `main` — require them.
 
 ---
 
-## Production hardening checklist
+## Operations
 
-- [ ] **Strong API keys.** Generate `AWB_API_KEYS` values with `openssl rand -hex 32`. One key per client so you can revoke individually.
-- [ ] **TLS.** Terminate HTTPS at a reverse proxy (nginx, Caddy, or your cloud LB). Do not expose plain `:8000` publicly.
-- [ ] **PostgreSQL for >1 instance.** SQLite is fine for a single container; switch to Postgres before you scale out.
-- [ ] **Restrict CORS.** Set `AWB_CORS_ORIGINS` to your exact frontend origins, never `*`, if the API is browser-facing.
-- [ ] **Least-privilege GitHub token.** Use a fine-grained PAT scoped to the target org/repos only.
-- [ ] **Resource limits.** Cap container CPU/memory; tune `AWB_MAX_CONCURRENT_BUILDS` to your host.
-- [ ] **Persist `/data`** (or your Postgres volume) so workflow history and artifacts survive restarts.
-
-## Health, readiness, and probes
-
-`GET /health` returns `200` only when the database and at least one model provider are reachable, otherwise `503`. Wire it to your orchestrator:
-
-```yaml
-# Kubernetes
-livenessProbe:  { httpGet: { path: /health, port: 8000 }, initialDelaySeconds: 10, periodSeconds: 15 }
-readinessProbe: { httpGet: { path: /health, port: 8000 }, initialDelaySeconds: 5,  periodSeconds: 10 }
-```
-
-## Logging & observability
-
-Logs are structured JSON on stdout (level via `AWB_LOG_LEVEL`); collect them with your platform's log driver. Each log line carries the `workflow_id` so you can trace a single build end to end. Prometheus metrics are exposed at `/metrics` (unauthenticated on the internal port) — scrape `awb_builds_total`, `awb_build_duration_seconds`, and `awb_test_pass_ratio`.
-
-## Backups
-
-Everything durable is in the database (`AWB_DATABASE_URL`) and the artifacts directory under `/data`.
-
-```bash
-# SQLite
-docker run --rm -v awb-data:/data -v "$PWD:/backup" alpine \
-  sh -c "cp /data/awb.db /backup/awb-$(date +%F).db"
-
-# PostgreSQL
-docker exec awb-db pg_dump -U awb awb > awb-$(date +%F).sql
-```
-
-Restore by stopping the service, replacing the file / restoring the dump, and starting again.
-
-## Upgrades
-
-The build ships a versioned schema; migrations are forward-only.
-
-```bash
-docker pull ai-workflow-builder:<new-version>
-docker stop awb && docker rm awb
-# run the migration (idempotent), then start the new image
-docker run --rm --env-file awb.env -v awb-data:/data ai-workflow-builder:<new-version> awb db upgrade
-docker run -d --name awb --env-file awb.env -p 8000:8000 -v awb-data:/data ai-workflow-builder:<new-version>
-```
-
-Always back up the database before upgrading. Check the release notes for breaking changes; deprecated API behavior is retained for one minor version before removal.
-
-## Common deployment failures
-
-| Symptom | Likely cause | Fix |
-|---------|--------------|-----|
-| `/health` returns `503`, `checks.model_provider: "error"` | No provider key, or the provider is unreachable. | Confirm the key env var is set and egress to the provider is allowed. |
-| Every `/api/v1/*` call returns `401` | `AWB_API_KEYS` unset or client sending the wrong key. | Set the env var; send `Authorization: Bearer <key>`. |
-| `publish` returns `422` | `GITHUB_TOKEN` not configured. | Provide a `repo`-scoped token and restart. |
-| Data lost on restart | `/data` (or Postgres volume) not persisted. | Mount a named volume as shown above. |
-| Builds queue and never start | `AWB_MAX_CONCURRENT_BUILDS` too low or host starved. | Raise the limit and/or give the container more CPU. |
+- **Health:** `GET /api/health` returns status, service name, build version, and uptime. The
+  container `HEALTHCHECK` and Fly checks both hit it.
+- **Backups:** the entire state is the SQLite file on the volume. Snapshot the volume (Fly volume
+  snapshots) or copy `/data/app.db` out on a schedule.
+- **Upgrades:** push to `main`; CI rebuilds and redeploys both halves. Schema migrations in
+  `server/migrations/` are applied automatically at boot before traffic is served.

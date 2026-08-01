@@ -6,6 +6,7 @@
 
 import express from 'express';
 import { createRouter } from './routes.js';
+import { corsMiddleware } from './cors.js';
 import { ProjectService } from '../../application/projectService.js';
 
 /**
@@ -13,6 +14,9 @@ import { ProjectService } from '../../application/projectService.js';
  */
 export function createApp(repos) {
   const app = express();
+  // Cross-origin policy runs before anything else so pre-flight requests are
+  // answered without touching the JSON parser or the router.
+  app.use(corsMiddleware());
   app.use(express.json({ limit: '256kb' }));
 
   const service = new ProjectService(repos);

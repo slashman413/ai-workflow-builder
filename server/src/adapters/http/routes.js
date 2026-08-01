@@ -5,8 +5,21 @@
  * architect rule on not bypassing use cases).
  */
 
+import { readFileSync } from 'node:fs';
 import { Router } from 'express';
 import { AppError } from '../../application/projectService.js';
+
+// Read the service identity once at load time so the health probe stays a pure
+// in-memory response (no filesystem hit per request). Falls back gracefully if
+// the manifest can't be read.
+const SERVICE = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url)));
+    return { name: pkg.name, version: pkg.version };
+  } catch {
+    return { name: 'ai-workflow-builder-server', version: 'unknown' };
+  }
+})();
 
 /**
  * @param {import('../../application/projectService.js').ProjectService} service
@@ -29,7 +42,18 @@ export function createRouter(service) {
     }
   };
 
-  router.get('/health', (_req, res) => res.json({ status: 'ok' }));
+  // Liveness/diagnostics probe for the container orchestrator (Fly checks) and
+  // Cloudflare edge. Returns status plus service identity and uptime so an
+  // operator can tell *which* build answered and how long it has been up.
+  router.get('/health', (_req, res) =>
+    res.json({
+      status: 'ok',
+      service: SERVICE.name,
+      version: SERVICE.version,
+      uptime: Math.round(process.uptime()),
+      timestamp: new Date().toISOString(),
+    }),
+  );
 
   // Projects
   router.post('/projects', wrap((req) => withStatus(service.createProject(req.body?.prompt), 201)));

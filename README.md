@@ -1,77 +1,153 @@
 # ai-workflow-builder
 
-> Turn a single natural-language prompt into a fully-tested, MIT-licensed multi-agent AI workflow — and push it to GitHub. Ambiguity is resolved up front by an interactive **Grill-Me** spec loop, not discovered later in production.
+> Turn a single natural-language prompt into a validated, dependency-checked multi-agent AI workflow. Ambiguity is resolved up front by an interactive **Grill-Me** spec loop — not discovered later in production.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![CI](https://img.shields.io/badge/CI-ruff%20%7C%20black%20%7C%20mypy%20%7C%20pytest-informational.svg)](#)
+[![Node 22.5+](https://img.shields.io/badge/node-22.5%2B-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![CI](https://img.shields.io/badge/CI-eslint%20%7C%20node%3Atest%20%7C%20vite%20build-informational.svg)](.github/workflows/ci-cd.yml)
+
+This is the codebase behind **[workflow-builders.com](https://workflow-builders.com)** — a
+Node.js + React studio for designing production multi-agent systems.
 
 ---
 
 ## Why this exists
 
-Building multi-agent AI pipelines today means one of two bad options: write brittle glue code by hand, or write an exhaustive spec up front before you know what you need. Ambiguous prompts get silently mis-interpreted and fail in production; on-call load and SLA breaches follow.
+Building multi-agent AI pipelines today means one of two bad options: hand-write brittle glue
+code, or write an exhaustive spec before you know what you need. Ambiguous prompts get silently
+mis-interpreted and fail in production.
 
-`ai-workflow-builder` closes that gap. You give it **one plain-language prompt**. It interrogates you (the "Grill-Me" loop) only about the parts that are genuinely ambiguous — which agents are needed, what tools they may call, latency and cost budgets — resolves those into a versioned spec, generates vetted code, runs the full reliability suite against it, and pushes the result to a GitHub repository.
+`ai-workflow-builder` closes that gap. You give it **one plain-language prompt**. It interrogates
+you (the **Grill-Me** loop) only about the parts that are genuinely ambiguous — the goal, the
+inputs, the shape of the output, how success is measured — resolves those into a versioned spec,
+scaffolds a validated workflow DAG, and generates runnable Python orchestration code from it.
 
-## The 30-second version
+## Stack
+
+This is a single **npm-workspaces monorepo**, not a Python CLI:
+
+| Workspace | What it is | Key tech |
+|-----------|------------|----------|
+| **`server/`** | The REST API | Node 22 · Express 4 · `node:sqlite` (built-in) |
+| **`web/`** | The single-page studio | React 18 · Vite 6 |
+
+The server is a **hexagonal (ports & adapters) modular monolith**. The `domain/` layer — the
+Grill engine, spec builder, workflow validator, topological sort, executor, and Python code
+generator — has **zero framework imports** and is covered by the bulk of the test suite. Express
+and SQLite are adapters plugged in at the composition root (`server/src/index.js`).
+
+> **Node 22.5+ is required.** Persistence uses the built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html)
+> module, which only exists on Node ≥ 22.5. On older Node the SQLite adapter — and its tests —
+> cannot load. CI pins Node 22.
+
+## Quick start
 
 ```bash
-pip install ai-workflow-builder            # or: pipx install ai-workflow-builder
-export OPENAI_API_KEY=sk-...               # or ANTHROPIC_API_KEY / GEMINI_API_KEY
-export GITHUB_TOKEN=ghp_...                # needed only to publish
+git clone https://github.com/slashman413/ai-workflow-builder.git
+cd ai-workflow-builder
+npm install              # installs both workspaces
 
-awb build "Summarize a URL, translate it to Traditional Chinese, and post to Slack"
+npm run dev              # server (:4000) + Vite dev server (:5173) together
 ```
 
-The CLI streams the Grill-Me questions to your terminal, applies your answers, generates the workflow, tests it, and (with `--publish`) opens a repo. Prefer HTTP? The same capability is exposed as a FastAPI service — see the [API Reference](docs/api-reference.md).
+Then open http://localhost:5173. The Vite dev server proxies `/api` to the backend, so there is
+no CORS to configure locally.
 
-## Documentation
+### Everyday commands
 
-| Guide | Read it when you want to… |
-|-------|---------------------------|
-| **[Usage Guide](docs/usage-guide.md)** | Install the tool and build your first workflow, CLI + HTTP, end to end. |
-| **[API Reference](docs/api-reference.md)** | Call the REST API directly, with every endpoint, request/response, and error code. |
-| **[Deployment Guide](docs/deployment-guide.md)** | Run the service in Docker, configure it for production, and operate it reliably. |
-| **[Contributing](docs/CONTRIBUTING.md)** | Set up a dev environment and land a change that passes CI. |
-| **[openapi.yaml](openapi.yaml)** | Import the machine-readable API contract into Postman, Stoplight, or a codegen tool. |
+| Command | Does |
+|---------|------|
+| `npm run dev` | Run API + web dev server concurrently |
+| `npm run dev:server` / `npm run dev:web` | Run one side only |
+| `npm test` | Run the server test suite (`node --test`) |
+| `npm run lint` | ESLint the server |
+| `npm run build` | Build the web SPA to `web/dist/` |
+| `npm start` | Start the API in production mode (SQLite) |
+
+### Configuration (server)
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `PORT` | `4000` | API listen port |
+| `DB_FILE` | `./data/app.db` | SQLite database path (auto-created) |
+| `USE_MEMORY` | — | Set to `1` to use the non-persistent in-memory repo |
+| `NODE_ENV` | — | `production` tightens the CORS allow-list |
+| `CORS_ORIGINS` | — | Comma-separated origin allow-list override |
+
+## The REST API
+
+All endpoints are served under `/api`. The machine-readable contract lives in
+[`openapi.yaml`](openapi.yaml) and is kept honest by an automated
+[contract test](server/test/contract.test.js) that fails CI if the routes and the spec ever drift.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/health` | Liveness probe (status, version, uptime) |
+| `POST` | `/api/projects` | Create a project from a prompt |
+| `GET` | `/api/projects` | List projects |
+| `GET` | `/api/projects/{id}` | Fetch a project |
+| `DELETE` | `/api/projects/{id}` | Delete a project |
+| `GET` | `/api/projects/{id}/grill` | Get the next Grill-Me questions |
+| `POST` | `/api/projects/{id}/answers` | Submit answers, advancing the spec |
+| `POST` | `/api/projects/{id}/workflow/scaffold` | Scaffold a workflow DAG from the spec |
+| `GET` | `/api/projects/{id}/workflow` | Fetch the current workflow |
+| `PUT` | `/api/projects/{id}/workflow` | Save/replace the workflow (validated) |
+
+See [`docs/api-reference.md`](docs/api-reference.md) for request/response shapes and error codes.
 
 ## How it works
 
 ```
-        prompt
-          │
-          ▼
-┌──────────────────────┐     questions      ┌──────────────────────┐
-│ Prompt Ingestion     │ ─────────────────▶ │  Grill-Me Spec Loop  │
-│ (parse + classify)   │ ◀───────────────── │  (clarify ambiguity) │
-└──────────────────────┘      answers       └──────────┬───────────┘
-                                                        │ resolved, versioned spec
-                                                        ▼
-                                             ┌──────────────────────┐
-                            selects agents   │   Agent Registry     │
-                          ◀───────────────── │  (capability catalog)│
-                                             └──────────┬───────────┘
-                                                        ▼
-                                             ┌──────────────────────┐
-                                             │   Code Generator     │
-                                             │ (workflow + tests)   │
-                                             └──────────┬───────────┘
-                                                        ▼
-                                             ┌──────────────────────┐
-                                             │  Reliability Engine  │
-                                             │ unit/integration/fuzz│
-                                             │  + static analysis   │
-                                             └──────────┬───────────┘
-                                                        ▼  (only if green)
-                                             ┌──────────────────────┐
-                                             │   Publisher          │
-                                             │ (commit + push repo) │
-                                             └──────────────────────┘
+   prompt
+     │
+     ▼
+┌──────────────┐   questions   ┌──────────────────┐
+│  Prompt      │ ───────────▶  │  Grill-Me loop   │
+│  ingestion   │ ◀───────────  │ (clarify spec)   │
+└──────────────┘   answers     └───────┬──────────┘
+                                        │ resolved, versioned spec
+                                        ▼
+                               ┌──────────────────┐
+                               │ Workflow scaffold│  validated DAG:
+                               │  + validator     │  no cycles, no dangling deps
+                               └───────┬──────────┘
+                                        ▼
+                               ┌──────────────────┐
+                               │ Python code-gen  │  runnable orchestration
+                               └──────────────────┘
 ```
 
-A workflow only reaches the Publisher if the Reliability Engine passes: generated code is not pushed unless it compiles, type-checks, and its generated test suite is green.
+## Deployment (Cloudflare-native hybrid)
+
+Production runs as two independently deployed halves:
+
+- **`workflow-builders.com`** → the React SPA on **Cloudflare Pages** (edge CDN, static build of
+  `web/dist/`). The deploy injects `VITE_API_URL=https://api.workflow-builders.com/api` at build
+  time so the SPA calls the API on its own origin.
+- **`api.workflow-builders.com`** → the Express API as a container on **Fly.io** (or Railway),
+  built from the production [`Dockerfile`](Dockerfile) with SQLite persisted to a mounted volume.
+
+Both halves ship from the CI/CD pipeline in [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml)
+on push to `main`, gated behind a green lint/test/build. Container config:
+[`fly.toml`](fly.toml), [`railway.toml`](railway.toml). Full runbook:
+[`docs/deployment-guide.md`](docs/deployment-guide.md).
+
+## Documentation
+
+| Guide | Read it to… |
+|-------|-------------|
+| [Usage Guide](docs/usage-guide.md) | Run locally and build your first workflow end to end |
+| [API Reference](docs/api-reference.md) | Call every endpoint with request/response/error detail |
+| [Architecture](docs/ARCHITECTURE.md) | Understand the hexagonal layering and module seams |
+| [Domain Model](docs/DOMAIN.md) | Learn the ubiquitous language (project, spec, workflow, node) |
+| [Deployment Guide](docs/deployment-guide.md) | Ship to Cloudflare Pages + Fly.io/Railway |
+| [Contributing](docs/CONTRIBUTING.md) | Set up a dev environment and land a change |
+| [ADRs](docs/adr/) | The recorded architecture decisions behind the above |
+
+## Attribution
+
+Ecosystem integrations and their licenses are tracked in [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md).
 
 ## License
 
-MIT © [slashman413](https://github.com/slashman413). See [LICENSE](LICENSE).
+[MIT](LICENSE).

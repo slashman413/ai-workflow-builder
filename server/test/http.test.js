@@ -32,10 +32,28 @@ after(() => server?.close());
 
 const json = (r) => r.json();
 
-maybe('health check responds', async () => {
+maybe('health check responds with status, version and uptime', async () => {
   const r = await fetch(`${base}/health`);
   assert.equal(r.status, 200);
-  assert.equal((await json(r)).status, 'ok');
+  const body = await json(r);
+  assert.equal(body.status, 'ok');
+  assert.ok(body.version, 'health payload exposes a service version');
+  assert.equal(typeof body.uptime, 'number');
+});
+
+maybe('CORS pre-flight is answered for a dev origin', async () => {
+  const r = await fetch(`${base}/projects`, {
+    method: 'OPTIONS',
+    headers: { origin: 'http://localhost:5173', 'access-control-request-method': 'POST' },
+  });
+  assert.equal(r.status, 204);
+  assert.equal(r.headers.get('access-control-allow-origin'), 'http://localhost:5173');
+});
+
+maybe('CORS does not reflect a disallowed origin', async () => {
+  const r = await fetch(`${base}/health`, { headers: { origin: 'https://evil.example.com' } });
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('access-control-allow-origin'), null);
 });
 
 maybe('end-to-end over HTTP: create, grill, answer, scaffold', async () => {

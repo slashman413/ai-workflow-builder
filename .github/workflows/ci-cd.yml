@@ -29,5 +29,65 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Build
+      - name: Build web bundle
         run: npm run build
+
+      - name: Upload web bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy-web:
+    name: Deploy SPA to Cloudflare Pages
+    # Only deploy real pushes to main, never PRs, and only after CI is green.
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web bundle (with production API base)
+        run: npm run build
+        env:
+          # The SPA calls the container API on its own origin in production.
+          VITE_API_URL: https://api.workflow-builders.com/api
+
+      - name: Publish to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: ai-workflow-builder-web
+          directory: web/dist
+          branch: main
+
+  deploy-api:
+    name: Deploy API container to Fly.io
+    # Runs in parallel with deploy-web, gated on the same green CI.
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

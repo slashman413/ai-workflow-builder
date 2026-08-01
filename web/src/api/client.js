@@ -6,7 +6,12 @@
  * plain data or a thrown ApiError.
  */
 
-const BASE = '/api';
+// In development the Vite dev server proxies `/api` to the backend (same
+// origin, no CORS). In production the SPA is served from Cloudflare Pages at
+// workflow-builders.com while the API runs on its own origin
+// (api.workflow-builders.com), so the deploy injects `VITE_API_URL` at build
+// time and every request is made against that absolute base.
+const BASE = import.meta.env.VITE_API_URL || '/api';
 
 export class ApiError extends Error {
   constructor(status, body) {

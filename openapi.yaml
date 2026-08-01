@@ -1,431 +1,425 @@
 openapi: 3.1.0
 info:
   title: ai-workflow-builder API
-  version: 1.0.0
+  version: 2.0.0
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
   description: |
-    Turn a single natural-language prompt into a tested, publishable multi-agent
-    AI workflow. Ambiguity is resolved by an interactive "Grill-Me" spec loop before
-    any code is generated, and generated code is only published if its generated
-    test suite passes.
+    HTTP contract for the `@ai-workflow-builder/server` Express 4 service that
+    powers workflow-builders.com.
 
-    ## Authentication
-    All `/api/v1/*` endpoints require `Authorization: Bearer <API_KEY>`. Keys are
-    configured server-side via the `AWB_API_KEYS` environment variable.
+    Turn a single natural-language prompt into a validated multi-agent workflow.
+    Ambiguity is resolved by a deterministic **Grill-Me** spec loop *before* a
+    workflow is scaffolded, and workflows are only persisted once they pass the
+    aggregate's invariants (unique ids, resolvable dependencies, acyclic).
+
+    This document was regenerated from the actual route table
+    (`server/src/adapters/http/routes.js`) and the domain shapes it serves. It
+    supersedes the earlier `/api/v1/agents|workflows` design, which described a
+    deprecated Python/FastAPI product that no longer exists.
+
+    ## Resource model
+    The real aggregate root is a **Project** (`{ prompt, answers, spec }`). Each
+    project has at most one compiled **Workflow**. There is no top-level
+    `/agents` or `/workflows` collection.
 
     ## Lifecycle
-    submit prompt -> answer Grill-Me questions until the spec resolves -> generate
-    -> test -> (optionally) publish. See the workflow `state` field.
+    `POST /api/projects` (prompt) → `GET .../grill` → `POST .../answers`
+    (repeat until `ready: true`) → `POST .../workflow/scaffold` →
+    `PUT .../workflow` (edit + validate).
+
+    ## Authentication
+    The Express service itself is unauthenticated. In production, user auth and
+    org scoping are enforced at the edge (Cloudflare + Clerk) in front of
+    `api.workflow-builders.com`; see docs/ARCHITECTURE. Endpoints below reflect
+    the service contract, not the edge policy.
+
 servers:
-  - url: http://localhost:8000
-    description: Local
-security:
-  - bearerAuth: []
+  - url: http://localhost:4000
+    description: Local development
+  - url: https://api.workflow-builders.com
+    description: Production (behind Cloudflare + Clerk edge auth)
+
 tags:
-  - name: workflows
-  - name: agents
   - name: system
+    description: Liveness and operational endpoints
+  - name: projects
+    description: Project lifecycle (prompt → spec)
+  - name: grill
+    description: The deterministic Grill-Me clarification loop
+  - name: workflow
+    description: Compiled workflow scaffold, validation, and persistence
 
 paths:
-  /health:
+  /api/health:
     get:
       tags: [system]
-      summary: Liveness/readiness probe
-      security: []
+      summary: Liveness probe
+      operationId: health
       responses:
         '200':
-          description: Service is up and dependencies are reachable
+          description: Service is up.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
-        '503':
-          description: A dependency is unreachable
 
-  /api/v1/agents:
-    get:
-      tags: [agents]
-      summary: List registered agents
-      parameters:
-        - name: capability
-          in: query
-          schema: { type: string }
-          description: Filter to agents providing this capability
-      responses:
-        '200':
-          description: The agents in the registry
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  agents:
-                    type: array
-                    items: { $ref: '#/components/schemas/Agent' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-
-  /api/v1/workflows:
+  /api/projects:
     post:
-      tags: [workflows]
-      summary: Submit a prompt and start a build
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+      tags: [projects]
+      summary: Create a project from a one-line prompt
+      operationId: createProject
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CreateWorkflowRequest' }
-            examples:
-              simple:
-                value:
-                  prompt: "Summarize a URL, translate it to Traditional Chinese, and post to Slack"
-                  interactive: true
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt:
+                  type: string
+                  description: The one-line natural-language prompt.
+                  example: summarise my emails
       responses:
         '201':
-          description: Workflow created
+          description: Project created; an initial spec snapshot is derived.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Workflow' }
-        '400': { $ref: '#/components/responses/ValidationError' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '429': { $ref: '#/components/responses/RateLimited' }
+              schema: { $ref: '#/components/schemas/Project' }
+        '400':
+          description: Prompt missing or not a non-empty string (`INVALID_PROMPT`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
     get:
-      tags: [workflows]
-      summary: List workflows
-      parameters:
-        - name: state
-          in: query
-          schema: { $ref: '#/components/schemas/WorkflowState' }
-        - name: limit
-          in: query
-          schema: { type: integer, default: 20, maximum: 100 }
-        - name: cursor
-          in: query
-          schema: { type: string }
+      tags: [projects]
+      summary: List all projects
+      operationId: listProjects
       responses:
         '200':
-          description: A page of workflows
+          description: Projects, newest first.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  workflows:
-                    type: array
-                    items: { $ref: '#/components/schemas/Workflow' }
-                  next_cursor:
-                    type: [string, "null"]
-        '401': { $ref: '#/components/responses/Unauthorized' }
+                type: array
+                items: { $ref: '#/components/schemas/Project' }
 
-  /api/v1/workflows/{id}:
+  /api/projects/{id}:
     parameters:
-      - $ref: '#/components/parameters/WorkflowId'
+      - $ref: '#/components/parameters/ProjectId'
     get:
-      tags: [workflows]
-      summary: Get a workflow's current state
+      tags: [projects]
+      summary: Get a project
+      operationId: getProject
       responses:
         '200':
-          description: The workflow
+          description: The project.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Workflow' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: '#/components/schemas/Project' }
+        '404':
+          $ref: '#/components/responses/NotFound'
     delete:
-      tags: [workflows]
-      summary: Delete a workflow and its artifacts
-      responses:
-        '204': { description: Deleted }
-        '404': { $ref: '#/components/responses/NotFound' }
-
-  /api/v1/workflows/{id}/questions:
-    parameters:
-      - $ref: '#/components/parameters/WorkflowId'
-    get:
-      tags: [workflows]
-      summary: Get open Grill-Me questions
+      tags: [projects]
+      summary: Delete a project (cascades to its workflow)
+      operationId: deleteProject
       responses:
         '200':
-          description: Open questions (empty unless state is needs_clarification)
+          description: Deleted.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  spec_version: { type: integer }
-                  questions:
-                    type: array
-                    items: { $ref: '#/components/schemas/Question' }
-        '404': { $ref: '#/components/responses/NotFound' }
+                  deleted: { type: boolean, const: true }
+                  id: { type: string }
+        '404':
+          $ref: '#/components/responses/NotFound'
 
-  /api/v1/workflows/{id}/answers:
+  /api/projects/{id}/grill:
     parameters:
-      - $ref: '#/components/parameters/WorkflowId'
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [grill]
+      summary: Get the next Grill-Me questions and readiness
+      operationId: grill
+      parameters:
+        - name: deep
+          in: query
+          required: false
+          schema: { type: string, enum: ['true', 'false'] }
+          description: >
+            When `true`, also surface non-critical questions for dimensions that
+            are already covered. Any value other than the literal string `true`
+            is treated as false.
+      responses:
+        '200':
+          description: Open questions plus per-dimension coverage.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GrillResult' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/projects/{id}/answers:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
     post:
-      tags: [workflows]
-      summary: Answer Grill-Me questions to advance the spec
+      tags: [grill]
+      summary: Submit answers to grill questions
+      operationId: answer
+      description: >
+        Merges the given answers into the project, re-derives the spec, and
+        returns the updated project.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/AnswersRequest' }
+            schema:
+              type: object
+              required: [answers]
+              properties:
+                answers:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: Map of questionId → free-text answer.
+                  example:
+                    goal.outcome: a daily digest
+                    inputs.source: my inbox
+                    outputs.shape: markdown
+                    success.measure: nothing urgent missed
       responses:
         '200':
-          description: Updated workflow (may surface follow-up questions)
+          description: The updated project with a re-derived spec.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Workflow' }
-        '400': { $ref: '#/components/responses/ValidationError' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/InvalidState' }
-
-  /api/v1/workflows/{id}/spec:
-    parameters:
-      - $ref: '#/components/parameters/WorkflowId'
-    get:
-      tags: [workflows]
-      summary: Get the resolved, versioned spec
-      responses:
-        '200':
-          description: The spec
+              schema: { $ref: '#/components/schemas/Project' }
+        '400':
+          description: '`answers` is missing or not a plain object (`INVALID_ANSWERS`).'
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Spec' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/InvalidState' }
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          $ref: '#/components/responses/NotFound'
 
-  /api/v1/workflows/{id}/artifacts:
+  /api/projects/{id}/workflow/scaffold:
     parameters:
-      - $ref: '#/components/parameters/WorkflowId'
-    get:
-      tags: [workflows]
-      summary: List generated code artifacts
-      responses:
-        '200':
-          description: The generated files
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  artifacts:
-                    type: array
-                    items: { $ref: '#/components/schemas/Artifact' }
-                  download_url: { type: string }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/InvalidState' }
-
-  /api/v1/workflows/{id}/test-report:
-    parameters:
-      - $ref: '#/components/parameters/WorkflowId'
-    get:
-      tags: [workflows]
-      summary: Get the Reliability Engine test report
-      responses:
-        '200':
-          description: The test report
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/TestReport' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/InvalidState' }
-
-  /api/v1/workflows/{id}/publish:
-    parameters:
-      - $ref: '#/components/parameters/WorkflowId'
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/ProjectId'
     post:
-      tags: [workflows]
-      summary: Push the generated workflow to a GitHub repo
+      tags: [workflow]
+      summary: Compile the current spec into a starter workflow
+      operationId: scaffoldWorkflow
+      description: >
+        Refuses with 409 unless the spec is ready, protecting against building
+        on an under-specified spec. Pass `force: true` to override.
       requestBody:
         required: false
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/PublishRequest' }
+            schema:
+              type: object
+              properties:
+                force:
+                  type: boolean
+                  default: false
+                  description: Scaffold even if the spec is not ready.
       responses:
-        '200':
-          description: Published
+        '201':
+          description: The scaffolded and persisted workflow.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Workflow' }
-        '409': { $ref: '#/components/responses/InvalidState' }
-        '422':
-          description: No GITHUB_TOKEN configured
+        '409':
+          description: Spec still has open questions (`SPEC_NOT_READY`).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
-        '502': { $ref: '#/components/responses/UpstreamError' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/projects/{id}/workflow:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [workflow]
+      summary: Get the project's saved workflow
+      operationId: getWorkflow
+      responses:
+        '200':
+          description: The workflow, or `null` if none has been scaffolded/saved yet.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/Workflow' }
+                  - { type: 'null' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [workflow]
+      summary: Persist a user-edited workflow after validation
+      operationId: saveWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workflow]
+              properties:
+                workflow: { $ref: '#/components/schemas/Workflow' }
+      responses:
+        '200':
+          description: The persisted workflow.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workflow' }
+        '422':
+          description: Workflow failed invariant validation (`INVALID_WORKFLOW`). `details` lists every violation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          $ref: '#/components/responses/NotFound'
 
 components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-
   parameters:
-    WorkflowId:
+    ProjectId:
       name: id
       in: path
       required: true
-      schema: { type: string, pattern: '^wf_' }
-    IdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: false
-      schema: { type: string }
-      description: Re-sending the same key returns the original result instead of duplicating the operation.
+      schema: { type: string, format: uuid }
+      description: Project id (UUID).
 
   responses:
-    Unauthorized:
-      description: Missing or invalid API key
-      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
     NotFound:
-      description: No such resource for this key
-      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
-    ValidationError:
-      description: Malformed body or a value failed a constraint
-      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
-    InvalidState:
-      description: Operation not valid in the workflow's current state
-      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
-    RateLimited:
-      description: Too many requests
-      headers:
-        Retry-After:
-          schema: { type: integer }
-          description: Seconds until the limit resets
-      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
-    UpstreamError:
-      description: A model provider or GitHub call failed; safe to retry
-      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+      description: The referenced project does not exist (`NOT_FOUND`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
 
   schemas:
     Health:
       type: object
       properties:
-        status: { type: string, example: ok }
-        version: { type: string, example: 1.0.0 }
-        checks:
+        status: { type: string, const: ok }
+        service: { type: string, example: '@ai-workflow-builder/server' }
+        version: { type: string, example: 0.1.0 }
+        uptime: { type: integer, description: Process uptime in whole seconds., example: 42 }
+        timestamp: { type: string, format: date-time }
+      required: [status]
+
+    Error:
+      type: object
+      description: Uniform error envelope emitted by the HTTP adapter.
+      properties:
+        error:
+          type: string
+          description: Stable machine-readable error code.
+          examples: [INVALID_PROMPT, INVALID_ANSWERS, NOT_FOUND, SPEC_NOT_READY, INVALID_WORKFLOW, INTERNAL]
+        message: { type: string }
+        details:
+          description: Optional structured detail (e.g. the list of workflow validation errors).
+      required: [error, message]
+
+    Project:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        prompt: { type: string }
+        answers:
           type: object
           additionalProperties: { type: string }
+          description: Map of questionId → answer gathered so far.
+        spec:
+          oneOf:
+            - { $ref: '#/components/schemas/Spec' }
+            - { type: 'null' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, prompt, answers, createdAt, updatedAt]
 
-    WorkflowState:
-      type: string
-      enum: [ingesting, needs_clarification, generating, generated, testing, tested, test_failed, publishing, published, error]
-
-    Workflow:
+    Spec:
       type: object
+      description: Structured spec re-derived from (prompt, answers). Downstream reads this, never the raw prompt.
       properties:
-        id: { type: string, example: wf_9f2a7c1b }
-        state: { $ref: '#/components/schemas/WorkflowState' }
-        prompt: { type: string }
-        spec_version: { type: [integer, "null"] }
-        open_questions: { type: integer }
-        test_report: { oneOf: [ { $ref: '#/components/schemas/TestReport' }, { type: "null" } ] }
-        repo_url: { type: [string, "null"] }
-        commit_sha: { type: [string, "null"] }
-        error: { type: [object, "null"] }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-      required: [id, state, prompt]
-
-    CreateWorkflowRequest:
-      type: object
-      properties:
-        prompt: { type: string, minLength: 1, maxLength: 4000 }
-        interactive: { type: boolean, default: true }
-        auto_publish: { type: boolean, default: false }
-        repo: { $ref: '#/components/schemas/PublishRequest' }
-      required: [prompt]
+        goal: { type: string }
+        why: { type: string }
+        inputs: { type: array, items: { type: string } }
+        outputs: { type: array, items: { type: string } }
+        constraints: { type: array, items: { type: string } }
+        successCriteria: { type: array, items: { type: string } }
+        edgeCases: { type: array, items: { type: string } }
+        ready:
+          type: boolean
+          description: True when every *critical* dimension is covered.
+        openQuestions:
+          type: array
+          items: { type: string }
+          description: Human-readable labels of dimensions still uncovered.
+      required: [goal, ready, openQuestions]
 
     Question:
       type: object
       properties:
-        id: { type: string }
-        text: { type: string }
-        field: { type: string }
-        kind: { type: string, enum: [free_text, single_choice, multi_choice, boolean, number] }
-        options:
+        id: { type: string, description: 'Stable, dimension-scoped id (e.g. "goal.outcome").' }
+        dimension: { type: string }
+        prompt: { type: string }
+        critical:
+          type: boolean
+          description: If true, the spec is not ready until this is answered.
+      required: [id, dimension, prompt, critical]
+
+    GrillResult:
+      type: object
+      description: >
+        Result of the grill step. `coverage` is a per-dimension boolean map (the
+        deterministic readiness breakdown), keyed by dimension id.
+      properties:
+        projectId: { type: string, format: uuid }
+        questions:
+          type: array
+          items: { $ref: '#/components/schemas/Question' }
+        ready: { type: boolean }
+        missing:
           type: array
           items: { type: string }
-        required: { type: boolean }
-
-    AnswersRequest:
-      type: object
-      properties:
-        answers:
-          type: array
-          items:
-            type: object
-            properties:
-              question_id: { type: string }
-              value: {}
-            required: [question_id, value]
-      required: [answers]
-
-    Spec:
-      type: object
-      properties:
-        spec_version: { type: integer }
-        name: { type: string }
-        steps:
-          type: array
-          items:
-            type: object
-            properties:
-              id: { type: string }
-              agent: { type: string }
-              inputs: { type: object, additionalProperties: true }
-        assumptions:
+          description: Ids of uncovered *critical* dimensions (block readiness).
+        warnings:
           type: array
           items: { type: string }
-        budgets:
+          description: Ids of uncovered non-critical dimensions.
+        coverage:
           type: object
-          properties:
-            max_latency_ms: { type: integer }
-            max_cost_usd: { type: number }
+          additionalProperties: { type: boolean }
+          description: dimensionId → covered?.
+      required: [projectId, questions, ready, missing, warnings, coverage]
 
-    Artifact:
+    Workflow:
       type: object
       properties:
-        path: { type: string }
-        bytes: { type: integer }
-        sha256: { type: string }
-
-    TestReport:
-      type: object
-      properties:
-        passed: { type: boolean }
-        suites: { type: object, additionalProperties: true }
-        static_analysis: { type: object, additionalProperties: true }
-        coverage_percent: { type: number }
-        duration_seconds: { type: number }
-
-    PublishRequest:
-      type: object
-      properties:
+        id: { type: string, example: wf_9f1c… }
         name: { type: string }
-        private: { type: boolean, default: true }
-        description: { type: string }
+        nodes:
+          type: array
+          items: { $ref: '#/components/schemas/WorkflowNode' }
+      required: [nodes]
 
-    Agent:
+    WorkflowNode:
       type: object
       properties:
         id: { type: string }
+        type:
+          type: string
+          enum: [input, agent, tool, branch, output]
         name: { type: string }
-        capabilities: { type: array, items: { type: string } }
-        inputs: { type: array, items: { type: string } }
-        outputs: { type: array, items: { type: string } }
-        provider: { type: string }
-
-    Error:
-      type: object
-      properties:
-        error:
+        config:
           type: object
-          properties:
-            code: { type: string, example: VALIDATION_ERROR }
-            message: { type: string }
-            field: { type: string }
-          required: [code, message]
-      required: [error]
+          additionalProperties: true
+          description: Node-type-specific configuration (sources, objective, constraints, …).
+        dependsOn:
+          type: array
+          items: { type: string }
+          description: Ids of nodes this node depends on. Must resolve; graph must be acyclic.
+      required: [id, type]
