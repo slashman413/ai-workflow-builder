@@ -10,18 +10,28 @@
  *   - VAULT_KEK must be a 32-byte base64 key in production (envelope
  *     encryption); without it the server refuses to boot rather than degrade
  *     to an ephemeral key.
+ *
+ * Catalog seeding (Increment 3): when a source has no installed snapshot the
+ * server seeds it from the bundled fixtures (server/fixtures/catalog/) so the
+ * marketplace works out of the box. Disable with CATALOG_AUTOSEED=0. The
+ * nightly sync (server/src/cli/sync-catalogs.js) later replaces the seed with
+ * pinned upstream content.
  */
 
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createApp } from './adapters/http/app.js';
 import { createSqliteRepos } from './adapters/persistence/sqliteRepos.js';
 import { createMemoryRepos } from './adapters/persistence/memoryRepos.js';
+import { CatalogService } from './application/catalogService.js';
 import { resolveAuthMode } from './adapters/http/auth.js';
 import { loadKek } from './domain/vault/crypto.js';
 
 const PORT = Number(process.env.PORT ?? 4000);
 const DB_FILE = process.env.DB_FILE ?? './data/app.db';
+const HERE = dirname(fileURLToPath(import.meta.url));
+const FIXTURES_DIR = join(HERE, '..', 'fixtures', 'catalog');
 
 function makeRepos() {
   if (process.env.USE_MEMORY === '1') {
@@ -53,7 +63,25 @@ function makeAuth() {
 const kek = loadKek();
 console.log('[vault] envelope encryption ready (AES-256-GCM, per-org DEK wrapped by environment KEK)');
 
-const app = createApp(makeRepos(), { auth: makeAuth(), kek });
+const repos = makeRepos();
+const app = createApp(repos, { auth: makeAuth(), kek });
+
+// Best-effort catalog seed: only for sources with no installed snapshot, and
+// only when the bundled fixtures are present. A failed seed is logged, never
+// fatal — the marketplace stays empty until the operator runs the sync CLI.
+if (process.env.CATALOG_AUTOSEED !== '0') {
+  const catalogService = new CatalogService(repos);
+  for (const source of ['agency-agents', 'nuwa-skill']) {
+    if (catalogService.status(source).ok) continue;
+    const result = catalogService.loadFromBundle(source, join(FIXTURES_DIR, source));
+    if (result.ok) {
+      console.log(`[catalog] ${source} seeded from bundle (${result.installed?.summary})`);
+    } else {
+      console.log(`[catalog] ${source} seed skipped: ${result.error}`);
+    }
+  }
+}
+
 app.listen(PORT, () => {
   console.log(`ai-workflow-builder API listening on http://localhost:${PORT}`);
 });

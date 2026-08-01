@@ -12,11 +12,20 @@
  * (404). `assertOrg` is a service-level backstop: even if a future controller
  * forgets to pass the tenant, the request dies here instead of leaking into
  * the empty tenant.
+ *
+ * Grill guardrails (Increment 3): the clarification loop is free to the user
+ * but NOT free to the operator. `answer()` enforces the ceilings from
+ * domain/grill/guardrails.js (≤5 turns, ≤15,000 estimated tokens per
+ * session) in the SERVICE layer — cumulative counters persisted on the
+ * latest grill_sessions row — so the ceiling is the business rule and cannot
+ * be bypassed by calling the API directly, SSE stream or batch endpoint
+ * alike. Exceeding a ceiling answers HTTP 429 GRILL_LIMIT.
  */
 
 import { nextQuestions, assessReadiness, coverageScore } from '../domain/grill/grillEngine.js';
 import { buildSpec, suggestNodes } from '../domain/spec/specBuilder.js';
 import { validateWorkflow } from '../domain/workflow/validateWorkflow.js';
+import { GUARDRAILS, estimateTokens, checkGuardrails } from '../domain/grill/guardrails.js';
 import { AppError, assertOrg } from './errors.js';
 
 export class ProjectService {
@@ -64,17 +73,45 @@ export class ProjectService {
     };
   }
 
-  /** Record answers to grill questions and re-derive the spec snapshot. */
+  /** Cumulative guardrail counters for a project's grill session (SSE pre-check). */
+  grillUsage(orgId, id) {
+    this.getProject(orgId, id); // existence + tenant check
+    const usage = this.grillSessions.usage(orgId, id) ?? { turns: 0, tokensUsed: 0 };
+    return { projectId: id, ...usage, limits: { ...GUARDRAILS } };
+  }
+
+  /**
+   * Record answers to grill questions and re-derive the spec snapshot.
+   *
+   * Financial-DoS guardrails: each round consumes one turn and the estimated
+   * tokens of the prompt + answers. Exceeding either ceiling answers HTTP 429
+   * (RATE_LIMITED) BEFORE anything is persisted — the ceiling is the business
+   * rule, enforced here so it cannot be bypassed by calling the API directly.
+   */
   answer(orgId, id, answers) {
     const project = this.getProject(orgId, id);
     if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
       throw new AppError('INVALID_ANSWERS', 'answers must be an object of questionId -> text.');
     }
+    const values = Object.values(answers).filter((v) => typeof v === 'string');
+    const usage = this.grillSessions.usage(orgId, id) ?? { turns: 0, tokensUsed: 0 };
+    const incomingTokens = estimateTokens(project.prompt, values);
+    const check = checkGuardrails(usage, incomingTokens);
+    if (!check.ok) {
+      throw new AppError('GRILL_LIMIT', check.message, 429, {
+        turns: usage.turns,
+        tokensUsed: usage.tokensUsed,
+        incomingTokens,
+        limits: { ...GUARDRAILS },
+      });
+    }
+
     const merged = { ...project.answers, ...answers };
     const spec = buildSpec(project.prompt, merged);
     const updated = this.projects.update(orgId, id, { answers: merged, spec });
 
-    // Append a grill session row — the audit trail of the clarification loop.
+    // Append a grill session row — the audit trail of the clarification loop,
+    // carrying the cumulative guardrail counters.
     const readiness = assessReadiness(project.prompt, merged);
     const round = (this.grillSessions.listByProject(orgId, id)?.length ?? 0) + 1;
     this.grillSessions.record(orgId, id, {
@@ -82,6 +119,8 @@ export class ProjectService {
       answers: merged,
       coverage: coverageScore(project.prompt, merged),
       ready: readiness.ready,
+      turns: usage.turns + 1,
+      tokensUsed: usage.tokensUsed + incomingTokens,
     });
 
     return updated;

@@ -21,6 +21,7 @@ import { AuthBar } from './components/AuthBar.jsx';
 import { PromptInput } from './components/PromptInput.jsx';
 import { GrillPanel } from './components/GrillPanel.jsx';
 import { WorkflowView } from './components/WorkflowView.jsx';
+import { MarketplaceSidebar } from './components/MarketplaceSidebar.jsx';
 import { VaultPanel } from './components/VaultPanel.jsx';
 import { RoleGate } from './components/RoleGate.jsx';
 import { hasRole } from './auth/roles.js';
@@ -32,6 +33,7 @@ export function App() {
   const [grill, setGrill] = useState(null);
   const [workflow, setWorkflow] = useState(null);
   const [projects, setProjects] = useState([]);
+  const [activeLensId, setActiveLensId] = useState(null);
   const [error, setError] = useState(null);
 
   const canWrite = isSignedIn && hasRole(role?.name, 'architect');
@@ -112,6 +114,14 @@ export function App() {
 
       {isSignedIn && (
         <RoleGate min="viewer">
+          <div className="workspace">
+            <MarketplaceSidebar
+              canEdit={canWrite}
+              activeLensId={activeLensId}
+              onSelectLens={setActiveLensId}
+            />
+
+            <div className="workspace-main">
           <section className="card project-list">
             <h2>Workspace projects</h2>
             {projects.length === 0 ? (
@@ -153,9 +163,18 @@ export function App() {
             <GrillPanel grill={grill} onSubmit={submitAnswers} onBuild={build} readOnly={!canWrite} />
           )}
 
-          {stage === 'build' && workflow && <WorkflowView workflow={workflow} onReset={reset} />}
+          {stage === 'build' && workflow && project && (
+            <WorkflowView
+              workflow={workflow}
+              projectId={project.id}
+              canEdit={canWrite}
+              onReset={reset}
+            />
+          )}
 
           <VaultPanel />
+            </div>
+          </div>
         </RoleGate>
       )}
     </main>

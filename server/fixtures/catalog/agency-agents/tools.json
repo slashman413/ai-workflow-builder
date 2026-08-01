@@ -1,0 +1,18 @@
+{
+  "_note": "Bundled seed snapshot (format mirrors upstream tools.json). Full allow-list arrives with the nightly sync.",
+  "agentql": { "label": "AgentQL", "short": "web data extraction via natural language", "icon": "Database" },
+  "anthropic": { "label": "Anthropic Claude", "short": "Claude API access", "icon": "Sparkles" },
+  "apify": { "label": "Apify", "short": "web scraping and automation platform", "icon": "Spider" },
+  "artifacts": { "label": "Claude Artifacts", "short": "rich artifact rendering in Claude", "icon": "Box" },
+  "bash": { "label": "Bash", "short": "shell command execution", "icon": "Terminal" },
+  "browser": { "label": "Browser", "short": "headed browser automation", "icon": "Globe" },
+  "bybit": { "label": "Bybit", "short": "crypto exchange trading", "icon": "Bitcoin" },
+  "deepseek": { "label": "DeepSeek", "short": "DeepSeek LLM API", "icon": "Brain" },
+  "github": { "label": "GitHub", "short": "repos, issues, PRs, actions", "icon": "Github" },
+  "google": { "label": "Google", "short": "search and workspace APIs", "icon": "Search" },
+  "openai": { "label": "OpenAI", "short": "OpenAI models and APIs", "icon": "Sparkle" },
+  "perplexity": { "label": "Perplexity", "short": "answer engine with citations", "icon": "BookOpen" },
+  "python": { "label": "Python", "short": "python code execution", "icon": "Code" },
+  "slack": { "label": "Slack", "short": "Slack workspace messaging", "icon": "MessageSquare" },
+  "supabase": { "label": "Supabase", "short": "postgres + auth + storage", "icon": "Database" }
+}

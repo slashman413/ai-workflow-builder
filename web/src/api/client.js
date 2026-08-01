@@ -57,9 +57,40 @@ export const api = {
   saveWorkflow: (id, workflow) =>
     request(`/projects/${id}/workflow`, { method: 'PUT', body: JSON.stringify({ workflow }) }),
   getWorkflow: (id) => request(`/projects/${id}/workflow`),
+  /**
+   * SAFE execution preview — static DAG validation + mock-handler simulation
+   * only. No user code ever executes on the server (see safety.test.js).
+   */
+  simulate: (workflow) => request('/workflow/simulate', { method: 'POST', body: JSON.stringify({ workflow }) }),
   vault: {
     list: () => request('/vault'),
     store: (payload) => request('/vault', { method: 'POST', body: JSON.stringify(payload) }),
     remove: (id) => request(`/vault/${id}`, { method: 'DELETE' }),
+  },
+  /**
+   * Ecosystem catalogs (Increment 3) — the Agent Marketplace + Cognitive
+   * Lens selector. All read-only, global MIT data; any authenticated org.
+   */
+  catalog: {
+    sources: () => request('/catalog'),
+    divisions: () => request('/catalog/divisions'),
+    agents: ({ division, q, limit } = {}) => {
+      const params = new URLSearchParams();
+      if (division) params.set('division', division);
+      if (q) params.set('q', q);
+      if (limit) params.set('limit', String(limit));
+      const qs = params.toString();
+      return request(`/catalog/agents${qs ? `?${qs}` : ''}`);
+    },
+    agent: (id) => request(`/catalog/agents/${encodeURIComponent(id)}`),
+    lenses: () => request('/catalog/lenses'),
+    lens: (id) => request(`/catalog/lenses/${encodeURIComponent(id)}`),
+    /** Persona catalog grouped by division (the marketplace payload). */
+    personas: () => request('/catalog/personas'),
+    /** Source alias: 'agency-agents' → personas, 'nuwa-skill' → lenses. */
+    source: (name) => request(`/catalog/${encodeURIComponent(name)}`),
+    snapshots: (source) => request(`/catalog/snapshots?source=${encodeURIComponent(source)}`),
+    /** Pinned-version report for the marketplace badges. */
+    checkUpdates: () => request('/skills/check-updates'),
   },
 };

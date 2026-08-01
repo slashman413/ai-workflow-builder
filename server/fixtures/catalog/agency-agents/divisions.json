@@ -1,0 +1,14 @@
+{
+  "_note": "Bundled seed snapshot (format mirrors upstream divisions.json). The nightly sync replaces this with the live immutable-fork content.",
+  "divisions": {
+    "academic": { "label": "Academic", "icon": "GraduationCap", "color": "#8B5CF6" },
+    "design": { "label": "Design", "icon": "PenTool", "color": "#EC4899" },
+    "engineering": { "label": "Engineering", "icon": "Code", "color": "#3B82F6" },
+    "finance": { "label": "Finance", "icon": "DollarSign", "color": "#22C55E" },
+    "marketing": { "label": "Marketing", "icon": "Megaphone", "color": "#F59E0B" },
+    "product": { "label": "Product", "icon": "Package", "color": "#10B981" },
+    "sales": { "label": "Sales", "icon": "Handshake", "color": "#EF4444" },
+    "security": { "label": "Security", "icon": "ShieldCheck", "color": "#64748B" },
+    "support": { "label": "Support", "icon": "LifeBuoy", "color": "#06B6D4" }
+  }
+}

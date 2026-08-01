@@ -1,144 +1,126 @@
 /**
- * schema.js — strict validators for the ecosystem catalog records.
+ * schema.js - strict schema validation for catalog records.
  *
- * The upstream mirrors (agency-agents, nuwa-skill) are community repositories
- * with organic formatting: fields drift, emoji creep in, frontmatter blocks
- * go missing. The ingestion engine treats their content as *untrusted input*
- * and runs every record through these validators before anything reaches the
- * database. A record that fails validation is skipped and counted, never
- * partially persisted — the snapshot swap is all-or-nothing (see
- * CatalogService), which is what lets us keep serving the last-known-good
- * snapshot when upstream breaks.
- *
- * All validators are PURE functions of their input; no I/O, no state.
+ * Used by the ingestion pipeline to validate parsed persona and lens records
+ * before they reach persistence. Each record type has its own validator that
+ * returns { ok: boolean, errors?: string[] }.
  */
 
-/** Required frontmatter fields per record kind, with their expected JS types. */
-const PERSONA_FIELDS = {
-  name: 'string',
-  description: 'string',
-  emoji: 'string',
-  color: 'string',
-  vibe: 'string',
-  tools: 'array',
-};
-
-const LENS_FIELDS = {
-  name: 'string',
-  description: 'string',
-};
-
-/** Validate one normalized persona record. Returns { ok, errors }. */
+/**
+ * Validate a persona record.
+ * @param {object} record
+ * @returns {{ ok: boolean, errors?: string[] }}
+ */
 export function validatePersona(record) {
   const errors = [];
-  if (!record || typeof record !== 'object') {
-    return { ok: false, errors: ['record is not an object'] };
+
+  if (!record.slug || typeof record.slug !== 'string' || record.slug.trim().length === 0) {
+    errors.push('slug is required and must be a non-empty string');
   }
-  for (const [field, type] of Object.entries(PERSONA_FIELDS)) {
-    const value = record[field];
-    if (value === undefined || value === null || value === '') {
-      if (field === 'name' || field === 'description') {
-        errors.push(`missing required field "${field}"`);
-      }
-      continue;
-    }
-    if (type === 'array' && !Array.isArray(value)) {
-      errors.push(`field "${field}" must be an array`);
-    } else if (type === 'string' && typeof value !== 'string') {
-      errors.push(`field "${field}" must be a string`);
-    }
+  if (!record.division || typeof record.division !== 'string' || record.division.trim().length === 0) {
+    errors.push('division is required');
   }
-  if (typeof record.slug !== 'string' || !record.slug.trim()) {
-    errors.push('missing or empty "slug"');
+  if (!record.name || typeof record.name !== 'string' || record.name.trim().length === 0) {
+    errors.push('name is required and must be a non-empty string');
   }
-  if (typeof record.division !== 'string' || !record.division.trim()) {
-    errors.push('missing or empty "division"');
+  if (!record.description || typeof record.description !== 'string' || record.description.trim().length === 0) {
+    errors.push('description is required');
   }
-  if (typeof record.body !== 'string' || record.body.trim().length === 0) {
-    errors.push('missing or empty markdown "body"');
+  if (!record.body || typeof record.body !== 'string' || record.body.trim().length === 0) {
+    errors.push('body is required');
   }
   if (record.tools !== undefined && !Array.isArray(record.tools)) {
-    errors.push('field "tools" must be an array of tool ids');
-  } else if (Array.isArray(record.tools) && record.tools.some((t) => typeof t !== 'string')) {
-    errors.push('field "tools" must contain only strings');
+    errors.push('tools must be an array');
   }
-  return { ok: errors.length === 0, errors };
-}
 
-/** Validate one normalized lens record. Returns { ok, errors }. */
-export function validateLens(record) {
-  const errors = [];
-  if (!record || typeof record !== 'object') {
-    return { ok: false, errors: ['record is not an object'] };
-  }
-  for (const [field, type] of Object.entries(LENS_FIELDS)) {
-    const value = record[field];
-    if (value === undefined || value === null || value === '') {
-      if (field === 'name' || field === 'description') {
-        errors.push(`missing required field "${field}"`);
-      }
-      continue;
-    }
-    if (type === 'string' && typeof value !== 'string') {
-      errors.push(`field "${field}" must be a string`);
-    }
-  }
-  if (typeof record.slug !== 'string' || !record.slug.trim()) {
-    errors.push('missing or empty "slug"');
-  }
-  if (typeof record.body !== 'string' || record.body.trim().length === 0) {
-    errors.push('missing or empty markdown "body"');
-  }
   return { ok: errors.length === 0, errors };
 }
 
 /**
- * Validate the divisions.json payload. Returns
- * { ok, divisions: Map<divisionId, {label, icon, color}> }.
- * A division entry must be an object carrying a display label; icon/color are
- * presentation hints and default gracefully.
+ * Validate a lens record.
+ * @param {object} record
+ * @returns {{ ok: boolean, errors?: string[] }}
+ */
+export function validateLens(record) {
+  const errors = [];
+
+  if (!record.slug || typeof record.slug !== 'string' || record.slug.trim().length === 0) {
+    errors.push('slug is required and must be a non-empty string');
+  }
+  if (!record.name || typeof record.name !== 'string' || record.name.trim().length === 0) {
+    errors.push('name is required and must be a non-empty string');
+  }
+  if (!record.description || typeof record.description !== 'string' || record.description.trim().length === 0) {
+    errors.push('description is required');
+  }
+  if (!record.body || typeof record.body !== 'string' || record.body.trim().length === 0) {
+    errors.push('body is required');
+  }
+
+  return { ok: errors.length === 0, errors };
+}
+
+/**
+ * Validate divisions.json structure.
+ * @param {object} raw
+ * @returns {{ ok: boolean, divisions?: Map<string, object>, errors?: string[] }}
  */
 export function validateDivisions(raw) {
-  if (!raw || typeof raw !== 'object' || !raw.divisions || typeof raw.divisions !== 'object') {
-    return { ok: false, divisions: new Map(), errors: ['divisions.json missing "divisions" object'] };
-  }
-  const divisions = new Map();
   const errors = [];
+  if (!raw || typeof raw !== 'object' || !raw.divisions || typeof raw.divisions !== 'object') {
+    return { ok: false, errors: ['divisions.json must contain a "divisions" object'] };
+  }
+
+  const divisions = new Map();
   for (const [id, meta] of Object.entries(raw.divisions)) {
     if (!meta || typeof meta !== 'object') {
-      errors.push(`division "${id}" has no metadata object`);
+      errors.push(`division "${id}": must be an object`);
       continue;
     }
-    if (typeof meta.label !== 'string' || !meta.label.trim()) {
-      errors.push(`division "${id}" missing display label`);
+    if (!meta.label || typeof meta.label !== 'string' || meta.label.trim().length === 0) {
+      errors.push(`division "${id}": missing or empty "label"`);
       continue;
     }
     divisions.set(id, {
+      id,
       label: meta.label,
-      icon: typeof meta.icon === 'string' ? meta.icon : 'Boxes',
-      color: typeof meta.color === 'string' ? meta.color : '#64748B',
+      icon: typeof meta.icon === 'string' ? meta.icon : null,
+      color: typeof meta.color === 'string' ? meta.color : null,
     });
   }
-  return { ok: errors.length === 0, divisions, errors };
+
+  return errors.length === 0
+    ? { ok: true, divisions }
+    : { ok: false, errors };
 }
 
 /**
- * Validate the tools.json payload. Returns
- * { ok, tools: Map<toolId, {label, short}> }.
- * Tools are only used to decorate persona permission tags, so a malformed
- * entry degrades to the raw id rather than failing the whole sync.
+ * Validate tools.json structure. Malformed entries degrade (are skipped),
+ * they do not fail the whole catalog.
+ * @param {object} raw
+ * @returns {{ ok: boolean, tools?: Map<string, object>, errors?: string[] }}
  */
 export function validateTools(raw) {
+  const errors = [];
   if (!raw || typeof raw !== 'object' || !raw.tools || typeof raw.tools !== 'object') {
-    return { ok: false, tools: new Map(), errors: ['tools.json missing "tools" object'] };
+    return { ok: false, errors: ['tools.json must contain a "tools" object'] };
   }
+
   const tools = new Map();
   for (const [id, meta] of Object.entries(raw.tools)) {
-    if (!meta || typeof meta !== 'object') continue;
+    if (!meta || typeof meta !== 'object') {
+      errors.push(`tool "${id}": malformed entry, skipping`);
+      continue;
+    }
     tools.set(id, {
-      label: typeof meta.label === 'string' && meta.label ? meta.label : id,
-      short: typeof meta.short === 'string' && meta.short ? meta.short : id,
+      id,
+      label: typeof meta.label === 'string' ? meta.label : id,
+      short: typeof meta.short === 'string' ? meta.short : null,
+      icon: typeof meta.icon === 'string' ? meta.icon : null,
     });
   }
-  return { ok: true, tools, errors: [] };
+
+  return errors.length === 0
+    ? { ok: true, tools }
+    : { ok: true, tools, warnings: errors };
 }

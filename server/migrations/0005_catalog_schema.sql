@@ -6,8 +6,13 @@
 -- ecosystem mirrors. A sync writes a new catalog_versions row first; only a
 -- fully committed snapshot replaces the rows of the previous one (the
 -- repository performs the whole swap inside one transaction). If parsing or
--- validation fails, a `failed`/`partial` version row is recorded and the
--- previously committed rows are left untouched — the API keeps serving them.
+-- validation fails, a `failed` version row is recorded and the previously
+-- committed rows are left untouched — the API keeps serving them.
+--
+-- catalog_versions.payload holds the FULL parsed catalog JSON (divisions,
+-- tools, personas or lenses) exactly as installed. It is what `restore()`
+-- re-installs when the operator rolls back to a good snapshot, and it
+-- carries the division/tool metadata the marketplace renders.
 --
 -- grill_sessions gains the two cumulative counters backing the guardrails:
 --   turns       — how many answer rounds the clarification loop has consumed
@@ -23,14 +28,15 @@ CREATE TABLE IF NOT EXISTS catalog_versions (
   source     TEXT NOT NULL,               -- 'agency-agents' | 'nuwa-skill'
   version    TEXT NOT NULL,               -- pinned fingerprint (git short hash or content digest)
   status     TEXT NOT NULL,               -- 'ok' | 'partial' | 'failed'
-  counts     TEXT NOT NULL DEFAULT '{}',  -- JSON { personas, lenses, skipped, errors }
+  counts     TEXT NOT NULL DEFAULT '{}',  -- JSON { personas, lenses, divisions, tools }
   error      TEXT,                        -- last sync failure message (failed/partial)
+  payload    TEXT,                        -- full installed catalog JSON (ok rows; restore source)
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_catalog_versions_source ON catalog_versions (source, created_at);
 
 CREATE TABLE IF NOT EXISTS personas (
-  id          TEXT PRIMARY KEY,           -- '{division}/{slug}'
+  id          TEXT PRIMARY KEY,           -- 'agency-agents:<division>/<slug>' (full API id)
   source      TEXT NOT NULL,
   version_id  TEXT NOT NULL REFERENCES catalog_versions(id) ON DELETE CASCADE,
   division    TEXT NOT NULL,              -- division dir key (engineering, sales, ...)
@@ -48,7 +54,7 @@ CREATE INDEX IF NOT EXISTS idx_personas_source_version ON personas (source, vers
 CREATE INDEX IF NOT EXISTS idx_personas_division ON personas (division);
 
 CREATE TABLE IF NOT EXISTS lenses (
-  id          TEXT PRIMARY KEY,           -- slug, e.g. 'naval-perspective'
+  id          TEXT PRIMARY KEY,           -- 'nuwa-skill:<slug>' (full API id)
   source      TEXT NOT NULL,
   version_id  TEXT NOT NULL REFERENCES catalog_versions(id) ON DELETE CASCADE,
   slug        TEXT NOT NULL,

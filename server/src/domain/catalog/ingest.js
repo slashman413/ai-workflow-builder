@@ -1,156 +1,210 @@
 /**
- * ingest.js — parse + normalize ecosystem mirror content into catalog records.
+ * ingest.js - filesystem ingestion pipeline for catalog mirrors.
  *
- * Two upstream shapes are supported:
+ * Reads YAML frontmatter from persona files (agency-agents) and SKILL.md
+ * files (nuwa-skill), validates them against the schema, and returns parsed
+ * records. Used by CatalogService to populate the database.
  *
- *   agency-agents (personas): one markdown file per persona with a YAML
- *     frontmatter block (name, description, emoji, color, vibe, tools...).
- *     Files live in per-division directories (engineering/, sales/, ...); the
- *     division set itself comes from divisions.json. tools.json decorates the
- *     permission tags.
- *
- *   nuwa-skill (lenses): one SKILL.md per distilled perspective, again with
- *     YAML frontmatter (name, description), optionally accompanied by a
- *     FIDELITY.md. The repository root SKILL.md (huashu-nuwa) is itself a
- *     lens; the examples/{name}/SKILL.md files are the distilled perspectives.
- *
- * Everything here is pure: given paths + text it returns records or skip
- * reasons. Persistence decisions (what counts as a failed sync) live in
- * CatalogService; this module never touches the filesystem itself.
+ * Exports:
+ *   parseFrontmatter(text) -> { attrs, body } | null
+ *   parsePersonaFile(filename, text) -> persona record | null
+ *   parseLensFile(slug, text) -> lens record | null
+ *   ingestPersonas(dir, { divisions, tools }) -> { personas, skipped, errors }
+ *   ingestLenses(dir) -> { lenses, skipped, errors }
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename } from 'node:path';
 import YAML from 'yaml';
 import { validatePersona, validateLens } from './schema.js';
 
-/** Split `---`-delimited YAML frontmatter off a markdown document. */
+// ---------------------------------------------------------------------------
+// Frontmatter parsing
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse YAML frontmatter from a markdown document.
+ * @param {string} text
+ * @returns {{ attrs: object, body: string } | null}
+ */
 export function parseFrontmatter(text) {
-  if (typeof text !== 'string') return null;
-  if (!text.startsWith('---')) return null;
-  const end = text.indexOf('\n---', 3);
-  if (end === -1) return null;
-  const yamlBlock = text.slice(3, end);
-  const body = text.slice(end + 4).replace(/^\n+/, '');
+  const trimmed = String(text);
+  if (!trimmed.startsWith('---')) return null;
+
+  // Find closing --- on its own line
+  const secondLine = trimmed.indexOf('\n---');
+  if (secondLine === -1) return null;
+
+  const raw = trimmed.slice(3, secondLine);
+  const body = trimmed.slice(secondLine + 4).replace(/^\n+/, '');
+
+  let attrs;
   try {
-    const attrs = YAML.parse(yamlBlock);
+    attrs = YAML.parse(raw);
     if (!attrs || typeof attrs !== 'object' || Array.isArray(attrs)) return null;
-    return { attrs, body };
   } catch {
-    return null; // malformed YAML — caller counts this as a skip, not a crash
+    return null; // malformed YAML
+  }
+
+  return { attrs, body };
+}
+
+// ---------------------------------------------------------------------------
+// Persona parsing
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse one persona markdown file.
+ * @param {string} filename  e.g. 'engineering-backend-architect.md'
+ * @param {string} text
+ * @returns {object|null}
+ */
+export function parsePersonaFile(filename, text) {
+  const parsed = parseFrontmatter(text);
+  if (!parsed) return null;
+
+  const { attrs, body } = parsed;
+  const slug = basename(filename, '.md');
+  const name = typeof attrs.name === 'string' ? attrs.name.trim() : '';
+  const description = typeof attrs.description === 'string' ? attrs.description.trim() : '';
+
+  if (!name || !description || !body.trim()) return null;
+
+  const tools = Array.isArray(attrs.tools)
+    ? attrs.tools.filter(t => typeof t === 'string' && t.length > 0)
+    : [];
+
+  return {
+    slug,
+    name,
+    description,
+    body: body.trim(),
+    emoji: typeof attrs.emoji === 'string' ? attrs.emoji : null,
+    color: typeof attrs.color === 'string' ? attrs.color : null,
+    vibe: typeof attrs.vibe === 'string' ? attrs.vibe : null,
+    tools,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Lens parsing
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse one nuwa-skill perspective file.
+ * @param {string} slug  e.g. 'naval-perspective' or 'huashu-nuwa' for root
+ * @param {string} text
+ * @returns {object|null}
+ */
+export function parseLensFile(slug, text) {
+  const parsed = parseFrontmatter(text);
+  if (!parsed) return null;
+
+  const { attrs, body } = parsed;
+  const name = typeof attrs.name === 'string' ? attrs.name.trim() : slug;
+  const description = typeof attrs.description === 'string' ? attrs.description.trim() : '';
+
+  if (!description || !body.trim()) return null;
+
+  return {
+    slug,
+    name,
+    description,
+    body: body.trim(),
+    fidelity: null, // set by ingestLenses when FIDELITY.md exists
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Ingestion helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Read a JSON file from the directory root.
+ * @param {string} dir
+ * @param {string} filename
+ * @returns {object | null}
+ */
+function readJsonFile(dir, filename) {
+  try {
+    const path = join(dir, filename);
+    if (!statSync(path).isFile()) return null;
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
   }
 }
 
-const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
-
-/** Coerce a frontmatter attribute to a trimmed string, or undefined. */
-function str(attrs, key) {
-  const v = attrs?.[key];
-  return typeof v === 'string' && v.trim() ? v.trim() : undefined;
-}
-
 /**
- * Parse one agency-agents persona file into a normalized record. Returns
- * null when the file has no usable frontmatter (READMEs, playbooks, etc.).
- */
-export function parsePersonaFile(filePath, text) {
-  const parsed = parseFrontmatter(text);
-  if (!parsed) return null;
-  const { attrs, body } = parsed;
-  const slug = filePath.replace(/\.md$/i, '').split(/[\\/]/).pop();
-  const tools = Array.isArray(attrs.tools) ? attrs.tools.filter((t) => typeof t === 'string') : [];
-  const record = {
-    slug,
-    name: str(attrs, 'name'),
-    description: str(attrs, 'description'),
-    emoji: str(attrs, 'emoji'),
-    color: str(attrs, 'color'),
-    vibe: str(attrs, 'vibe'),
-    tools,
-    body,
-  };
-  // Division is filled in by the caller (ingestPersonas) from the directory
-  // layout; full strict validation happens there too.
-  return record;
-}
-
-/**
- * Parse one nuwa-skill SKILL.md into a normalized lens record. Returns null
- * when the file has no usable frontmatter.
- */
-export function parseLensFile(filePath, text) {
-  const parsed = parseFrontmatter(text);
-  if (!parsed) return null;
-  const { attrs, body } = parsed;
-  return {
-    slug: filePath.replace(/\.md$/i, '').split(/[\\/]/).pop(),
-    name: str(attrs, 'name'),
-    description: str(attrs, 'description'),
-    body,
-  };
-}
-
-/**
- * Ingest a whole agency-agents mirror directory.
- *
- * @param {string} dir Absolute path of the mirror checkout.
- * @param {object} deps
- * @param {Map<string, {label:string, icon:string, color:string}>} deps.divisions
- *   Division id -> metadata, from divisions.json (only these dirs are scanned).
- * @param {Map<string, {label:string}>} deps.tools  tool id -> metadata.
+ * Ingest all persona files from an agency-agents mirror.
+ * @param {string} dir  Path to the mirror root (contains divisions.json, tools.json, <division>/).
+ * @param {{ divisions: Map<string, object>, tools: Map<string, object> }} opts
  * @returns {{ personas: object[], skipped: string[], errors: string[] }}
- *   `personas` are validated, normalized records ready for persistence.
- *   `skipped` lists files that yielded no record (missing/malformed
- *   frontmatter); `errors` lists files that failed strict validation.
  */
 export function ingestPersonas(dir, { divisions, tools }) {
   const personas = [];
   const skipped = [];
   const errors = [];
 
-  for (const division of divisions.keys()) {
-    const divisionDir = join(dir, division);
-    let entries;
-    try {
-      entries = readdirSync(divisionDir, { withFileTypes: true });
-    } catch {
-      skipped.push(`${division}/ (directory missing)`);
-      continue;
-    }
+  try {
+    const entries = readdirSync(dir);
     for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
-      const filePath = join(divisionDir, entry.name);
-      let text;
-      try {
-        text = readFileSync(filePath, 'utf8');
-      } catch (err) {
-        skipped.push(`${division}/${entry.name} (unreadable: ${err.message})`);
+      const fullPath = join(dir, entry);
+      const stat = statSync(fullPath);
+
+      if (!stat.isDirectory()) continue;
+
+      // Only treat directories that exist in divisions.json as persona divisions
+      if (!divisions.has(entry)) {
+        skipped.push(entry);
         continue;
       }
-      const record = parsePersonaFile(entry.name, text);
-      if (!record) {
-        skipped.push(`${division}/${entry.name} (no frontmatter)`);
-        continue;
+
+      const files = readdirSync(fullPath);
+      for (const file of files) {
+        if (!file.endsWith('.md')) continue;
+
+        const filePath = join(dir, entry, file);
+        try {
+          const text = readFileSync(filePath, 'utf8');
+          const record = parsePersonaFile(file, text);
+
+          if (!record) {
+            skipped.push(`${entry}/${file}`);
+            continue;
+          }
+
+          record.division = entry;
+
+          // Decorate tool tags with upstream labels (e.g. 'python' -> 'Python')
+          record.tools = record.tools.map(t => {
+            const meta = tools.get(t);
+            return meta ? meta.label : t;
+          });
+
+          // Validate the record
+          const validation = validatePersona(record);
+          if (!validation.ok) {
+            errors.push(`${entry}/${file}: ${validation.errors.join('; ')}`);
+            continue;
+          }
+
+          personas.push(record);
+        } catch (err) {
+          errors.push(`${entry}/${file}: ${err.message}`);
+        }
       }
-      record.division = division;
-      // Decorate permission tags with upstream tool labels (fall back to id).
-      record.tools = record.tools.map((id) => tools.get(id)?.label ?? id);
-      const check = validatePersona(record);
-      if (!check.ok) {
-        errors.push(`${division}/${entry.name} (${check.errors.join('; ')})`);
-        continue;
-      }
-      personas.push(record);
     }
+  } catch (err) {
+    errors.push(`Failed to read directory ${dir}: ${err.message}`);
   }
+
   return { personas, skipped, errors };
 }
 
 /**
- * Ingest the cognitive perspective lenses from a nuwa-skill checkout.
- * Lenses = the root SKILL.md plus every examples/{name}/SKILL.md.
- *
- * @param {string} dir Absolute path of the nuwa-skill checkout.
+ * Ingest all lens files from a nuwa-skill mirror.
+ * @param {string} dir  Path to the nuwa-skill root (contains SKILL.md, examples/, references/).
  * @returns {{ lenses: object[], skipped: string[], errors: string[] }}
  */
 export function ingestLenses(dir) {
@@ -158,77 +212,138 @@ export function ingestLenses(dir) {
   const skipped = [];
   const errors = [];
 
-  const candidates = [];
-  const rootSkill = join(dir, 'SKILL.md');
-  if (exists(rootSkill)) candidates.push({ path: rootSkill, slug: 'huashu-nuwa' });
-
-  let examples = [];
+  // 1. Root SKILL.md (the meta-skill / skill-distiller)
+  const rootSkillPath = join(dir, 'SKILL.md');
   try {
-    examples = readdirSync(join(dir, 'examples'), { withFileTypes: true });
-  } catch {
-    /* no examples dir — root skill only */
-  }
-  for (const entry of examples) {
-    if (!entry.isDirectory()) continue;
-    const skillPath = join(dir, 'examples', entry.name, 'SKILL.md');
-    if (exists(skillPath)) candidates.push({ path: skillPath, slug: entry.name });
-  }
+    if (statSync(rootSkillPath).isFile()) {
+      const text = readFileSync(rootSkillPath, 'utf8');
+      const parsed = parseFrontmatter(text);
+      if (parsed) {
+        const { attrs, body } = parsed;
+        // Derive slug from name (lowercase, spaces-hyphens)
+        const name = typeof attrs.name === 'string' ? attrs.name.trim() : 'nuwa-skill';
+        const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        const description = typeof attrs.description === 'string' ? attrs.description.trim() : '';
 
-  for (const { path, slug } of candidates) {
-    let text;
-    try {
-      text = readFileSync(path, 'utf8');
-    } catch (err) {
-      skipped.push(`${slug} (unreadable: ${err.message})`);
-      continue;
-    }
-    const record = parseLensFile(slug, text);
-    if (!record) {
-      skipped.push(`${slug} (no frontmatter)`);
-      continue;
-    }
-    record.slug = slug;
-    // FIDELITY.md sits next to each distilled skill when present.
-    const fidelityPath = join(path, '..', 'FIDELITY.md');
-    if (exists(fidelityPath)) {
-      try {
-        record.fidelity = readFileSync(fidelityPath, 'utf8');
-      } catch {
-        record.fidelity = null;
+        if (description && body.trim()) {
+          const record = {
+            slug,
+            name,
+            description,
+            body: body.trim(),
+            fidelity: null,
+          };
+
+          // Attach fidelity scorecard if present
+          const scorecardPath = join(dir, 'references', 'fidelity-scorecard.md');
+          try {
+            if (statSync(scorecardPath).isFile()) {
+              record.fidelity = readFileSync(scorecardPath, 'utf8');
+            }
+          } catch {
+            // No scorecard - fine
+          }
+
+          lenses.push(record);
+        } else {
+          skipped.push('SKILL.md');
+        }
+      } else {
+        skipped.push('SKILL.md (no frontmatter)');
       }
     }
-    const check = validateLens(record);
-    if (!check.ok) {
-      errors.push(`${slug} (${check.errors.join('; ')})`);
-      continue;
-    }
-    lenses.push(record);
+  } catch (err) {
+    errors.push(`Failed to read root SKILL.md: ${err.message}`);
   }
+
+  // 2. Example perspectives under examples/<name>/SKILL.md
+  const examplesDir = join(dir, 'examples');
+  try {
+    if (statSync(examplesDir).isDirectory()) {
+      const examples = readdirSync(examplesDir);
+      for (const example of examples) {
+        const examplePath = join(examplesDir, example);
+        if (!statSync(examplePath).isDirectory()) continue;
+
+        const skillPath = join(examplePath, 'SKILL.md');
+        try {
+          if (!statSync(skillPath).isFile()) {
+            skipped.push(`${example}/SKILL.md`);
+            continue;
+          }
+
+          const text = readFileSync(skillPath, 'utf8');
+          const parsed = parseFrontmatter(text);
+          if (!parsed) {
+            skipped.push(`${example}/SKILL.md (no frontmatter)`);
+            continue;
+          }
+
+          const { attrs, body } = parsed;
+          const name = typeof attrs.name === 'string' ? attrs.name.trim() : example;
+          const description = typeof attrs.description === 'string' ? attrs.description.trim() : '';
+
+          if (!description || !body.trim()) {
+            skipped.push(`${example}/SKILL.md (empty)`);
+            continue;
+          }
+
+          const record = {
+            slug: example,
+            name,
+            description,
+            body: body.trim(),
+            fidelity: null,
+          };
+
+          // Check for FIDELITY.md
+          const fidelityPath = join(examplePath, 'FIDELITY.md');
+          try {
+            if (statSync(fidelityPath).isFile()) {
+              record.fidelity = readFileSync(fidelityPath, 'utf8');
+            }
+          } catch {
+            // No FIDELITY.md - fine
+          }
+
+          // Validate
+          const validation = validateLens(record);
+          if (!validation.ok) {
+            errors.push(`${example}/SKILL.md: ${validation.errors.join('; ')}`);
+            continue;
+          }
+
+          lenses.push(record);
+        } catch (err) {
+          errors.push(`${example}/SKILL.md: ${err.message}`);
+        }
+      }
+    }
+  } catch (err) {
+    errors.push(`Failed to read examples directory: ${err.message}`);
+  }
+
   return { lenses, skipped, errors };
 }
 
-function exists(p) {
-  try {
-    return statSync(p).isFile();
-  } catch {
-    return false;
-  }
-}
+// ---------------------------------------------------------------------------
+// Convenience readers for divisions/tools.json
+// ---------------------------------------------------------------------------
 
-/** Read + validate the divisions.json of a mirror (may be absent in tests). */
+/**
+ * Read divisions.json as raw JSON (pre-validation).
+ * @param {string} dir
+ * @returns {object | null}
+ */
 export function readDivisions(dir) {
-  try {
-    return JSON.parse(readFileSync(join(dir, 'divisions.json'), 'utf8'));
-  } catch {
-    return null;
-  }
+  return readJsonFile(dir, 'divisions.json');
 }
 
-/** Read + validate the tools.json of a mirror (may be absent in tests). */
+/**
+ * Read tools.json as raw JSON (pre-validation).
+ * @param {string} dir
+ * @returns {object | null}
+ */
 export function readTools(dir) {
-  try {
-    return JSON.parse(readFileSync(join(dir, 'tools.json'), 'utf8'));
-  } catch {
-    return null;
-  }
+  return readJsonFile(dir, 'tools.json');
 }

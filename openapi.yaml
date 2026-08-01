@@ -64,6 +64,8 @@ tags:
     description: Compiled workflow scaffold, validation, and persistence
   - name: vault
     description: Envelope-encrypted LLM provider key vault
+  - name: catalog
+    description: Ecosystem catalogs (agency-agents personas, nuwa-skill lenses)
 
 # Everything except /api/health requires a Clerk session JWT (see
 # Authentication above). /api/health overrides with `security: []`.
@@ -408,6 +410,331 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  # --- Increment 3: ecosystem catalog + Grill-Me SSE -----------------------
+  # Catalog routes are read-only and require a session (any org — the catalog
+  # is global MIT content). Writes are operator-only via the sync CLI, never
+  # over HTTP.
+  /api/catalog:
+    get:
+      tags: [catalog]
+      summary: List catalog sources with their pinned versions
+      description: |
+        Returns the latest sync state of every catalog source
+        (agency-agents personas, nuwa-skill lenses): pinned version, status,
+        summary, and whether good data is installed and being served. Drives
+        the marketplace version badges.
+      operationId: listCatalogSources
+      responses:
+        '200':
+          description: Catalog source states (one entry per configured source).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CatalogSource' }
+  /api/catalog/personas:
+    get:
+      tags: [catalog]
+      summary: Persona catalog grouped by division (Agent Marketplace)
+      operationId: getPersonaCatalog
+      responses:
+        '200':
+          description: Personas grouped by division with tool permission tags.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PersonaCatalog' }
+        '404':
+          description: The marketplace has not been synced yet (`CATALOG_EMPTY`).
+  /api/catalog/divisions:
+    get:
+      tags: [catalog]
+      summary: Division metadata (marketplace grouping keys)
+      operationId: listDivisions
+      responses:
+        '200':
+          description: Division id/label/icon/color entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Division' }
+  /api/catalog/agents:
+    get:
+      tags: [catalog]
+      summary: List personas with division + tool permission tags
+      operationId: listAgents
+      parameters:
+        - name: division
+          in: query
+          schema: { type: string }
+          description: Filter by division id (e.g. `engineering`).
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Case-insensitive search over name, description, vibe.
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: Persona records (latest good snapshot).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Persona' }
+  /api/catalog/agents/{id}:
+    get:
+      tags: [catalog]
+      summary: Fetch one persona (tool tags + markdown body)
+      operationId: getAgent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: 'Full persona id, e.g. `agency-agents:engineering/backend-architect`.'
+      responses:
+        '200':
+          description: The persona record.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Persona' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/catalog/lenses:
+    get:
+      tags: [catalog]
+      summary: List cognitive perspective lenses
+      operationId: listLenses
+      responses:
+        '200':
+          description: Lens records from the latest good nuwa-skill snapshot.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Lens' }
+  /api/catalog/lenses/{id}:
+    get:
+      tags: [catalog]
+      summary: Fetch one lens (body + FIDELITY scorecard)
+      operationId: getLens
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: 'Full lens id, e.g. `nuwa-skill:munger-perspective`.'
+      responses:
+        '200':
+          description: The lens record (fidelity present when a scorecard exists).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lens' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/catalog/snapshots:
+    get:
+      tags: [catalog]
+      summary: Catalog sync provenance (snapshot history)
+      operationId: listSnapshots
+      parameters:
+        - name: source
+          in: query
+          required: true
+          schema: { type: string, enum: [agency-agents, nuwa-skill] }
+      responses:
+        '200':
+          description: Snapshot rows, newest first (ok + failed attempts).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CatalogSnapshot' }
+  /api/catalog/{source}:
+    parameters:
+      - name: source
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [agency-agents, nuwa-skill]
+    get:
+      tags: [catalog]
+      summary: Source alias — persona marketplace or lens catalog
+      description: |
+        `agency-agents` returns the persona catalog grouped by division;
+        `nuwa-skill` returns the cognitive perspective lenses. Always serves
+        the last-known-good snapshot.
+      operationId: getCatalog
+      responses:
+        '200':
+          description: Catalog payload.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/PersonaCatalog' }
+                  - { $ref: '#/components/schemas/LensCatalog' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/skills/check-updates:
+    get:
+      tags: [catalog]
+      summary: Report pinned versions for the marketplace badges
+      description: |
+        Reports, per source, the currently pinned version and sync state —
+        the frontend's staleness check. The nightly sync CLI advances the
+        pin; this endpoint only reports current state.
+      operationId: checkCatalogUpdates
+      responses:
+        '200':
+          description: Per-source pinned-version report.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CatalogSource' }
+  /api/grill/stream:
+    post:
+      tags: [grill]
+      summary: Open (or resume) the realtime Grill-Me SSE loop
+      description: |
+        Authenticated (Architect+). Opens a Server-Sent Events stream that
+        interrogates ONE question at a time: `session` (identity + guardrail
+        counters), `progress` (coverage), `question`, then `ready` +
+        `compiled` (Python workflow) + `done` when the spec is covered.
+        Answers are posted to `POST /api/grill/stream/{sessionId}/answers`.
+        Turn (≤ 5) and token (≤ 15,000) ceilings are enforced in the service
+        layer and surfaced as `limit` events / HTTP 429 — they cannot be
+        bypassed by calling the API directly.
+      operationId: openGrillStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt:
+                  type: string
+                  description: The workflow brief to interrogate (new session).
+                projectId:
+                  type: string
+                  format: uuid
+                  description: Attach the session to an existing project.
+                sessionId:
+                  type: string
+                  description: Resume an existing session (replays its transcript).
+      responses:
+        '200':
+          description: 'SSE event stream (`text/event-stream`).'
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: '`event: session|progress|question|ready|compiled|limit|done` frames, JSON `data` payloads.'
+        '400':
+          description: Missing prompt (`INVALID_PROMPT`).
+        '404':
+          description: Unknown session id on resume (`NOT_FOUND`).
+        '429':
+          description: Too many active sessions for the workspace (`TOO_MANY_SESSIONS`).
+  /api/grill/stream/{sessionId}/answers:
+    post:
+      tags: [grill]
+      summary: Answer the current grill question
+      operationId: answerGrillStream
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                answerId: { type: string, description: 'The question id from the last `question` event.' }
+                text: { type: string }
+              required: [answerId, text]
+      responses:
+        '200':
+          description: Session state (counters + next position).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GrillStreamState' }
+        '400':
+          description: Malformed answer (`INVALID_ANSWER`).
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Session closed (`SESSION_CLOSED`).
+        '429':
+          description: Ceiling reached (`GRILL_LIMIT`) — turn or token budget exhausted.
+  /api/grill/stream/{sessionId}:
+    get:
+      tags: [grill]
+      summary: Read a grill stream session's state (reconnect probe)
+      operationId: getGrillStreamState
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Session state JSON.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GrillStreamState' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/workflow/simulate:
+    post:
+      tags: [workflow]
+      summary: SAFE execution preview (static validation + mock simulation)
+      description: |
+        Statically validates the DAG and runs a topological simulation with
+        mock handlers. NO user code ever executes on the server — input URLs
+        are never fetched, agent steps return canned templates, outputs are
+        placeholders (see server/test/safety.test.js for the invariant).
+      operationId: simulateWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workflow: { $ref: '#/components/schemas/Workflow' }
+              required: [workflow]
+      responses:
+        '200':
+          description: Simulation result (steps with mock outputs).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  simulation: { type: boolean, const: true }
+                  success: { type: boolean }
+                  error: { type: string, nullable: true }
+                  errors: { type: array, items: { type: string } }
+                  steps:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        output:
+                          type: object
+                          additionalProperties: true
+                  note: { type: string }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -598,3 +925,128 @@ components:
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
       required: [id, provider, label, keyHandle, maskedKey]
+
+    # --- Increment 3: catalog schemas ---------------------------------------
+    CatalogSource:
+      type: object
+      description: Latest sync state of one catalog source.
+      properties:
+        source: { type: string, example: agency-agents }
+        version: { type: string, nullable: true, example: bundle-agency-agents }
+        status:
+          type: string
+          enum: [ok, failed, never-synced]
+          description: Status of the LATEST sync attempt (ok even when a newer attempt failed, if good data is installed).
+        ok:
+          type: boolean
+          description: Whether good data is installed and being served.
+        summary: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+        syncedAt: { type: string, format: date-time, nullable: true }
+
+    CatalogSnapshot:
+      type: object
+      description: One catalog sync attempt (provenance).
+      properties:
+        id: { type: string, example: 'agency-agents@bundle-agency-agents' }
+        source: { type: string }
+        version: { type: string }
+        status: { type: string, enum: [ok, partial, failed] }
+        summary: { type: string }
+        error: { type: string, nullable: true }
+        syncedAt: { type: string, format: date-time }
+
+    Division:
+      type: object
+      description: One marketplace division (from divisions.json).
+      properties:
+        id: { type: string, example: engineering }
+        label: { type: string, example: Engineering }
+        icon: { type: string, nullable: true }
+        color: { type: string, nullable: true }
+
+    Persona:
+      type: object
+      description: One agency-agents persona (immutable id + tool permission tags).
+      properties:
+        id: { type: string, example: 'agency-agents:engineering/backend-architect' }
+        source: { type: string, const: agency-agents }
+        version: { type: string, description: Pinned catalog version this row came from. }
+        division: { type: string, example: engineering }
+        divisionLabel: { type: string, example: Engineering }
+        slug: { type: string, example: backend-architect }
+        name: { type: string }
+        description: { type: string }
+        emoji: { type: string, nullable: true }
+        color: { type: string, nullable: true }
+        vibe: { type: string, nullable: true }
+        tools:
+          type: array
+          items: { type: string }
+          description: Tool permission tags (ids from the mirror's tools.json).
+        body:
+          type: string
+          description: Markdown personality body after the YAML frontmatter.
+
+    PersonaDivision:
+      type: object
+      description: One division bucket of the persona catalog.
+      properties:
+        id: { type: string, example: engineering }
+        label: { type: string }
+        icon: { type: string, nullable: true }
+        color: { type: string, nullable: true }
+        agents:
+          type: array
+          items: { $ref: '#/components/schemas/Persona' }
+
+    PersonaCatalog:
+      type: object
+      properties:
+        source: { type: string, const: agency-agents }
+        version: { type: string, nullable: true }
+        syncedAt: { type: string, format: date-time, nullable: true }
+        divisions:
+          type: array
+          items: { $ref: '#/components/schemas/PersonaDivision' }
+
+    Lens:
+      type: object
+      description: One nuwa-skill cognitive perspective lens.
+      properties:
+        id: { type: string, example: 'nuwa-skill:munger-perspective' }
+        source: { type: string, const: nuwa-skill }
+        version: { type: string, description: Pinned catalog version this row came from. }
+        slug: { type: string, example: munger-perspective }
+        name: { type: string }
+        description: { type: string }
+        fidelity: { type: string, nullable: true, description: FIDELITY.md scorecard body when present. }
+        body: { type: string, description: SKILL.md body after the YAML frontmatter. }
+
+    LensCatalog:
+      type: object
+      properties:
+        source: { type: string, const: nuwa-skill }
+        version: { type: string, nullable: true }
+        syncedAt: { type: string, format: date-time, nullable: true }
+        lenses:
+          type: array
+          items: { $ref: '#/components/schemas/Lens' }
+
+    GrillStreamState:
+      type: object
+      description: JSON snapshot of a grill stream session (answers route + GET probe).
+      properties:
+        sessionId: { type: string }
+        projectId: { type: string, format: uuid }
+        prompt: { type: string }
+        answers:
+          type: object
+          additionalProperties: { type: string }
+        turn: { type: integer }
+        turnsUsed: { type: integer }
+        turnsRemaining: { type: integer }
+        tokensUsed: { type: integer }
+        tokensRemaining: { type: integer }
+        state: { type: string, enum: [open, closed] }
+        closedReason: { type: string, nullable: true }
