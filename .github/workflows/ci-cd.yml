@@ -29,6 +29,9 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Coverage gate (>= 90% line)
+        run: node scripts/security/coverage-gate.mjs 90
+
       - name: Build web bundle
         run: npm run build
 
@@ -40,12 +43,33 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  security:
+    name: Security Gate (audit + secret scan + OSV)
+    # Runs in parallel with CI on every push/PR; the deploy jobs depend on
+    # BOTH ci and security being green.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run security gate
+        run: bash scripts/security/security-gate.sh
+
   deploy-web:
     name: Deploy SPA to Cloudflare Pages
     # Only deploy real pushes to main, never PRs, and only after CI is green.
     # The secrets guard keeps the pipeline green until the Pages token/account
     # are configured (then this job activates automatically).
-    needs: ci
+    needs: [ci, security]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != ''
     runs-on: ubuntu-latest
     steps:
@@ -84,7 +108,7 @@ jobs:
     name: Deploy API container to Fly.io
     # Runs in parallel with deploy-web, gated on the same green CI and the
     # Fly token being configured.
-    needs: ci
+    needs: [ci, security]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.FLY_API_TOKEN != ''
     runs-on: ubuntu-latest
     steps:

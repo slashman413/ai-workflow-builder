@@ -146,6 +146,21 @@ node scripts/security/coverage-gate.mjs    # line coverage ≥ 90% (96% today)
 bash scripts/security/security-gate.sh     # lint + test + build + secret scan + coverage
 ```
 
+### Increment 4 environment variables
+
+| Variable | Required | Used for |
+|----------|----------|----------|
+| `STRIPE_SECRET_KEY` | for billing | Stripe API (server-side operations) |
+| `STRIPE_WEBHOOK_SECRET` | for billing | Webhook signature verification (`whsec_…`) |
+| `STRIPE_TEAM_PRICE_ID` | for billing | The $99/mo Team tier price (`price_…`) |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | for publishing | GitHub OAuth app (repo scope) |
+| `GITHUB_REDIRECT_URI` | optional | OAuth callback URL (defaults to `<API_ORIGIN>/api/github/callback`) |
+| `POSTHOG_API_KEY` / `POSTHOG_HOST` | optional | Product analytics (falls back to local-only telemetry) |
+
+In production the server fails closed: billing/publishing endpoints answer 503 until the
+relevant credentials are set. In development, without these variables, the API still serves the
+full pre-auth flow, the Grill loop, mock simulation, and the pre-flight validator.
+
 ## How it works
 
 ```

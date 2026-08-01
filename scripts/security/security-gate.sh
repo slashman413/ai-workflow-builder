@@ -46,12 +46,18 @@ const require = createRequire(import.meta.url);
 const semver = require("semver");
 const packages = JSON.parse(fs.readFileSync("/tmp/osv-packages.json", "utf8"));
 
-/** Does `version` fall inside ANY affected range of an advisory? */
-function versionInRanges(version, advisory) {
-  const events = advisory.affected
-    ?.filter((a) => a.package?.name && a.package.ecosystem === "npm")
-    .flatMap((a) => a.ranges ?? [])
-    .flatMap((r) => r.events ?? []) ?? [];
+/** Does `version` fall inside ANY affected range / exact version of an advisory FOR THIS PACKAGE? */
+function versionInRanges(packageName, version, advisory) {
+  // Only the affected entries for the QUERIED package count — advisories
+  // cover many packages (e.g. GHSA-w24r-5266-9c3c lists @clerk/* SDKs) and
+  // mixing their ranges together produces false positives.
+  const npmAffected = advisory.affected?.filter((a) => a.package?.name === packageName && a.package.ecosystem === "npm") ?? [];
+  // Exact-version advisories (malware scanners): applies ONLY to the listed versions.
+  const exactVersions = npmAffected.flatMap((a) => a.versions ?? []);
+  if (exactVersions.length > 0) {
+    return exactVersions.some((v) => semver.satisfies(version, `=${v}`, { loose: true }) || v === version);
+  }
+  const events = npmAffected.flatMap((a) => a.ranges ?? []).flatMap((r) => r.events ?? []);
   // Walk event pairs: introduced → fixed / last_affected / introduced-only.
   const ranges = [];
   for (let i = 0; i < events.length; i += 2) {
@@ -64,7 +70,7 @@ function versionInRanges(version, advisory) {
     else if (upper.last_affected != null) ranges.push(`${low} <=${upper.last_affected}`);
     else if (upper.limit != null) ranges.push(`${low} <${upper.limit}`);
   }
-  if (ranges.length === 0) return true; // no usable range data — report for triage
+  if (ranges.length === 0) return true; // no usable version data at all — report for triage
   return ranges.some((r) => semver.satisfies(version, r, { includePrerelease: true, loose: true }));
 }
 
@@ -84,7 +90,7 @@ const worker = async () => {
       // The API over-reports (returns advisories whose ranges EXCLUDE the
       // installed version) — apply the ranges ourselves, like npm audit does.
       for (const v of body.vulns || []) {
-        if (versionInRanges(pkg.version, v)) results.push({ pkg: pkg.name, version: pkg.version, id: v.id });
+        if (versionInRanges(pkg.name, pkg.version, v)) results.push({ pkg: pkg.name, version: pkg.version, id: v.id });
       }
     } catch { /* transient — treated as no finding; npm audit is the authority */ }
   }
