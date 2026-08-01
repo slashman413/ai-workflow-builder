@@ -14,8 +14,10 @@ the web studio for the fast path, then see the equivalent HTTP calls so you can 
       module, which does not exist on older Node.
 - [ ] `git`
 
-That's it — there are no model-provider keys to set. The current increment is a deterministic
-spec/workflow studio; it does not call an LLM.
+Authentication defaults to **dev/test mode**: locally the API accepts any request and binds it to
+the `dev-org` workspace (see the auth note under the HTTP examples). Sign-in with Clerk
+(GitHub/Google OAuth + organizations) is opt-in and only enforced in production
+(`CLERK_SECRET_KEY` set) — you do not need Clerk credentials to run the studio locally.
 
 ---
 
@@ -50,6 +52,13 @@ CORS to configure. To run only one side: `npm run dev:server` or `npm run dev:we
 
 Everything the studio does is the REST API. With `export API=http://localhost:4000/api`:
 
+> **Auth in dev/test mode:** requests are bound to the `dev-org` workspace with Owner role by
+> default. To act as another user or a more restricted role, send the dev headers the server
+> reads in test mode: `x-org-id`, `x-user-role` (`viewer` | `architect` | `owner`), and
+> `x-user-id`. In production every request instead carries
+> `Authorization: Bearer <Clerk session JWT>` and the org is taken from the token — never from
+> the request.
+
 ```bash
 # 1. Create a project from a prompt
 ID=$(curl -s -X POST $API/projects -H 'content-type: application/json' \
@@ -69,8 +78,28 @@ curl -s -X POST $API/projects/$ID/workflow/scaffold -H 'content-type: applicatio
 See the [API Reference](api-reference.md) for every endpoint, and [`openapi.yaml`](../openapi.yaml)
 for the machine-readable contract.
 
+## Beyond the core loop
+
+The same project/workflow surface powers the product's higher-level features — all over HTTP:
+
+- **Realtime Grill-Me (SSE):** `POST /api/grill/stream` streams one question at a time
+  (`session | progress | question | ready | compiled | limit` events, ≤ 5 turns / 15k tokens),
+  with answers posted to `POST /api/grill/stream/{sessionId}/answers`.
+- **Agent Marketplace & Cognitive Lenses:** `GET /api/catalog/*` serves the pinned
+  `agency-agents` personas and `nuwa-skill` lenses (divisions, tool tags, fidelity scorecards).
+- **Safe preview:** `POST /api/workflow/simulate` runs a mock-handler topological simulation —
+  static validation only, nothing executes on the server.
+- **Publish gate:** `POST /api/workflow/preflight` runs the full static AST check before export.
+- **GitHub publishing:** `GET /api/github/auth-url` starts the OAuth dance; then
+  `POST /api/projects/{id}/publish` scaffolds a repo from the generated code and pushes it.
+- **LLM key vault:** `POST /api/vault` stores provider keys envelope-encrypted per workspace;
+  reads return masked labels only.
+- **Billing:** `GET /api/billing/entitlement` shows the current plan and usage
+  (Free: 10 Grill sessions/month, mock previews, no export; Team: unlimited).
+
 ## Persistence
 
 By default the API stores projects and workflows in SQLite at `server/data/app.db` (auto-created,
 git-ignored). To run without persistence for a throwaway session, start the server with
-`USE_MEMORY=1`.
+`USE_MEMORY=1`. The schema is managed by versioned migrations in `server/migrations/`, applied
+automatically at boot.

@@ -835,6 +835,7 @@ paths:
         sealed token against the org, and renders an HTML page that
         postMessages the outcome to the opener popup and closes.
       operationId: githubOAuthCallback
+      security: []
       parameters:
         - name: code
           in: query
@@ -995,11 +996,37 @@ paths:
         the billing_events ledger; subscription state is re-fetched from
         Stripe so out-of-order delivery cannot regress the row.
       operationId: stripeWebhook
+      security: []
+      requestBody:
+        required: true
+        description: >
+          Raw Stripe event payload. The route parses the RAW body (it is
+          mounted before the global JSON parser) and verifies the
+          `stripe-signature` header against `STRIPE_WEBHOOK_SECRET`.
+        content:
+          application/json:
+            schema:
+              type: object
+              description: A Stripe `event` object (see Stripe's API reference).
       responses:
         '200':
           description: Event acknowledged (processed or duplicate).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  received: { type: boolean, const: true }
         '400':
-          description: Signature verification failed.
+          description: Signature verification failed (`INVALID_SIGNATURE`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: Billing not configured on this deployment (`BILLING_NOT_CONFIGURED`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
   /api/billing:
     get:
       tags: [billing]
