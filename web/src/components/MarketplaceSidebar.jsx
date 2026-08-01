@@ -62,7 +62,7 @@ export function MarketplaceSidebar({ canEdit, activeLensId, onSelectLens, onAddP
             )
           : d.agents,
       }))
-      .filter((d) => d.agents.length > 0);
+      .filter((d) => d.agents.length > 0); // empty buckets never render
   }, [marketplace, q]);
 
   const toggle = (id) =>

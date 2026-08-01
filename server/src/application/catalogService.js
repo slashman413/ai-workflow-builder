@@ -97,11 +97,14 @@ export class CatalogService {
       }
       byDivision.get(agent.division).agents.push(agent);
     }
+    // Only divisions that actually contain personas become marketplace groups —
+    // divisions.json may declare more buckets than the snapshot has personas.
+    const populated = [...byDivision.values()].filter((d) => d.agents.length > 0);
     return {
       source: 'agency-agents',
       version: snapshot?.version ?? null,
       syncedAt: snapshot?.syncedAt ?? null,
-      divisions: [...byDivision.values()],
+      divisions: populated,
     };
   }
 
