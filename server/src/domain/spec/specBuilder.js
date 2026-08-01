@@ -62,44 +62,84 @@ export function buildSpec(prompt, answers = {}) {
 
 /**
  * Suggest a starter workflow from a Spec. This is intentionally simple and
- * transparent — a linear ingest → process → deliver skeleton the user then
- * edits in the builder. It gives the user something concrete to react to
- * rather than a blank canvas.
+ * transparent — one node per spec dimension, chained in execution order —
+ * giving the user something concrete to react to in the builder rather than a
+ * blank canvas. The chain is deterministic (same spec → same nodes) and the
+ * linear dependency order makes it acyclic by construction.
+ *
+ * Dimension → node mapping:
+ *   spec.inputs          → input node  (collects the sources)
+ *   spec.goal            → agent node  (the main AI agent)
+ *   spec.constraints     → tool node   (constraint checker)
+ *   spec.edgeCases       → branch node (error handling)
+ *   spec.successCriteria → tool node   (validation)
+ *   spec.outputs         → output node (delivers the results)
+ *
+ * Empty dimensions are skipped, so a bare prompt yields the minimal
+ * input → agent → output chain (3 nodes) and a fully specified spec yields 6.
  *
  * @param {Spec} spec
  * @returns {import('../workflow/workflow.js').WorkflowNode[]}
  */
 export function suggestNodes(spec) {
+  const inputs = spec?.inputs ?? [];
+  const outputs = spec?.outputs ?? [];
+  const constraints = spec?.constraints ?? [];
+  const successCriteria = spec?.successCriteria ?? [];
+  const edgeCases = spec?.edgeCases ?? [];
+
   const nodes = [];
+  /** Depend on whatever node precedes us in the chain — always acyclic. */
+  const dependsOnLast = () => (nodes.length === 0 ? [] : [nodes[nodes.length - 1].id]);
+
   nodes.push({
-    id: 'ingest',
+    id: 'input.collect',
     type: 'input',
     name: 'Collect inputs',
-    config: { describe: spec.inputs.join(', ') || 'user prompt' },
-    dependsOn: [],
+    config: { sources: [...inputs] },
+    dependsOn: dependsOnLast(),
   });
   nodes.push({
-    id: 'process',
+    id: 'agent.goal',
     type: 'agent',
-    name: 'Reason over inputs',
-    config: { objective: spec.goal, constraints: spec.constraints },
-    dependsOn: ['ingest'],
+    name: 'Achieve the goal',
+    config: { objective: spec?.goal || '' },
+    dependsOn: dependsOnLast(),
   });
-  if (spec.successCriteria.length > 0) {
+  if (constraints.length > 0) {
     nodes.push({
-      id: 'verify',
-      type: 'agent',
-      name: 'Verify against success criteria',
-      config: { criteria: spec.successCriteria },
-      dependsOn: ['process'],
+      id: 'tool.constraints',
+      type: 'tool',
+      name: 'Check constraints',
+      config: { constraints: [...constraints] },
+      dependsOn: dependsOnLast(),
+    });
+  }
+  if (edgeCases.length > 0) {
+    nodes.push({
+      id: 'branch.edgeCases',
+      type: 'branch',
+      name: 'Handle edge cases',
+      config: { cases: [...edgeCases] },
+      dependsOn: dependsOnLast(),
+    });
+  }
+  if (successCriteria.length > 0) {
+    nodes.push({
+      id: 'tool.validation',
+      type: 'tool',
+      name: 'Validate success criteria',
+      config: { criteria: [...successCriteria] },
+      dependsOn: dependsOnLast(),
     });
   }
   nodes.push({
-    id: 'deliver',
+    id: 'output.deliver',
     type: 'output',
-    name: 'Emit output',
-    config: { format: spec.outputs.join(', ') || 'text' },
-    dependsOn: [spec.successCriteria.length > 0 ? 'verify' : 'process'],
+    name: 'Emit outputs',
+    config: { targets: [...outputs] },
+    dependsOn: dependsOnLast(),
   });
+
   return nodes;
 }
