@@ -55,7 +55,10 @@ test('generate produces the full project file set', () => {
   const { files, summary } = generate({ spec: sampleSpec(), workflow: fullWorkflow() });
   assert.deepEqual(Object.keys(files).sort(), [
     '.env.example',
+    '.github/workflows/ci.yml',
+    '.gitignore',
     'README.md',
+    'interfaces.py',
     'main.py',
     'requirements.txt',
     'tests/test_workflow.py',
@@ -64,7 +67,7 @@ test('generate produces the full project file set', () => {
     assert.equal(typeof content, 'string', `${path} must be a string`);
     assert.ok(content.length > 0, `${path} must not be empty`);
   }
-  assert.equal(summary, 'Generated 5 files, 1 agent, 2 tools');
+  assert.equal(summary, 'Generated 8 files, 1 agent, 2 tools');
 });
 
 test('main.py maps every node type to the right Python pattern', () => {
@@ -109,7 +112,7 @@ test('generated main.py is a runnable, well-formed Python module', (t) => {
     'run_tool_validation',
     'run_output_deliver',
   ]);
-  assert.match(main, /^def main\(\) -> dict\[str, Any\]:/m);
+  assert.match(main, /^def main\(continue_on_error: bool = False\) -> dict\[str, Any\]:/m);
   assert.match(main, /ctx\[node\["id"\]\] = function\(ctx\)/);
   assert.match(main, /if __name__ == "__main__":/);
 
@@ -256,9 +259,66 @@ test('minimal input -> agent -> output chain still generates a working project',
     ],
   };
   const { files, summary } = generate({ workflow: minimal });
-  assert.equal(summary, 'Generated 5 files, 1 agent, 0 tools');
+  assert.equal(summary, 'Generated 8 files, 1 agent, 0 tools');
   assert.match(files['main.py'], /sources: list\[str\] = \[\n    "data\.csv",\n\]/);
   assert.match(files['tests/test_workflow.py'], /test_output_nodes_deliver_to_targets/);
   assertPythonValid(t, files['main.py'], 'minimal main.py');
   assertPythonValid(t, files['tests/test_workflow.py'], 'minimal tests');
+});
+
+test('generated project ships typed interfaces (interfaces.py)', () => {
+  const { files } = generate({ spec: sampleSpec(), workflow: fullWorkflow() });
+  const types = files['interfaces.py'];
+  for (const symbol of ['WorkflowContext', 'NodeSpec', 'WorkflowFn', 'InputNodeResult', 'ToolNodeResult', 'OutputNodeResult', 'NodeResult']) {
+    assert.ok(types.includes(symbol), `interfaces.py must define ${symbol}`);
+  }
+  // The registry is typed and imports resolve from the generated project.
+  const main = files['main.py'];
+  assert.match(main, /from interfaces import NodeSpec, WorkflowContext, WorkflowFn/);
+  assert.match(main, /NODES: list\[NodeSpec\] =/);
+  assertPythonValid({ skip: () => {} }, types, 'interfaces.py');
+});
+
+test('agent nodes carry a retry + fallback handler', () => {
+  const { files } = generate({ spec: sampleSpec(), workflow: fullWorkflow() });
+  const main = files['main.py'];
+  assert.match(main, /LLM_MAX_RETRIES = 2/);
+  assert.match(main, /RETRY_BACKOFF_SECONDS = 2/);
+  assert.match(main, /DEFAULT_AGENT_FALLBACK/);
+  assert.match(main, /def _call_openai\(/);
+  assert.match(main, /def _call_anthropic\(/);
+  assert.match(main, /fallback=DEFAULT_AGENT_FALLBACK\.format\(attempts=LLM_MAX_RETRIES\)/);
+  // A node with an explicit fallback pins its own text.
+  const wf = fullWorkflow();
+  wf.nodes[1] = { ...wf.nodes[1], config: { objective: 'draft', fallback: 'no LLM today' } };
+  const explicit = generate({ workflow: wf });
+  assert.match(explicit.files['main.py'], /fallback="no LLM today"/);
+  // main() accepts the workflow-level continue-on-error fallback.
+  assert.match(main, /def main\(continue_on_error: bool = False\)/);
+  assert.match(main, /--continue-on-error/);
+  assertPythonValid({ skip: () => {} }, main, 'main.py');
+});
+
+test('generated pytest suite covers fallback + continue-on-error + types', (t) => {
+  const { files } = generate({ spec: sampleSpec(), workflow: fullWorkflow() });
+  const tests = files['tests/test_workflow.py'];
+  for (const expected of [
+    'test_agent_node_falls_back_when_llm_unavailable',
+    'test_main_continue_on_error_records_failures',
+    'test_types_module_exposes_typed_interfaces',
+  ]) {
+    assert.ok(tests.includes(expected), `missing generated test ${expected}`);
+  }
+  assertPythonValid(t, tests, 'tests/test_workflow.py');
+});
+
+test('generated project ships GitHub Actions CI and .gitignore', () => {
+  const { files } = generate({ spec: sampleSpec(), workflow: fullWorkflow() });
+  const ci = files['.github/workflows/ci.yml'];
+  assert.match(ci, /name: CI/);
+  assert.match(ci, /actions\/checkout@v4/);
+  assert.match(ci, /pip install -r requirements.txt/);
+  assert.match(ci, /python -m pytest -q/);
+  assert.match(files['.gitignore'], /__pycache__/);
+  assert.match(files['.gitignore'], /\.venv/);
 });

@@ -151,3 +151,139 @@ Deletes an entry; 404 if it does not exist in the caller's org.
 The plaintext is only ever recoverable server-side via the internal
 `VaultService.revealKey()` used by the workflow executor — no HTTP route
 exposes it.
+
+---
+
+## Pre-flight validation (Increment 4)
+
+### `POST /workflow/preflight`
+Run the full static gate over a workflow: structural DAG checks (cycles,
+dangling refs, duplicate ids), reachability (islands, unreachable nodes,
+dead ends), schema parameter matching, tool-boundary constraints against
+the marketplace allow-list, and the security boundary reassertion. Pure
+static analysis — nothing is executed.
+
+```json
+// request
+{ "workflow": { "id": "wf_1", "name": "…", "nodes": [ … ] } }
+// 200 response — a report, not an error
+{
+  "valid": true,
+  "summary": "ok: 1 warning",
+  "errors": [],
+  "warnings": [ { "code": "UNBOUND_AGENT", "message": "…", "nodeId": "agent-1" } ],
+  "checks": [
+    { "name": "structural", "passed": true, "count": 0 },
+    { "name": "reachability", "passed": true, "count": 0 },
+    { "name": "schema", "passed": true, "count": 0 },
+    { "name": "toolBoundary", "passed": true, "count": 0 },
+    { "name": "security", "passed": true, "count": 0 }
+  ],
+  "security": { "executedCode": false, "boundary": "static-only", "blocked": [] }
+}
+```
+
+Pre-flight error codes: `CYCLE`, `DANGLING_DEPENDENCY`, `DUPLICATE_ID`,
+`MISSING_CONFIG`, `CONFIG_TYPE`, `CONFIG_VALUE`, `NON_SERIALIZABLE_CONFIG`,
+`MISSING_PERSONA`, `UNKNOWN_TOOL`, `TOOL_NOT_PERMITTED`, `SECURITY_BOUNDARY`.
+Warnings: `DISCONNECTED_NODE`, `UNREACHABLE_FROM_INPUT`, `NO_PATH_TO_OUTPUT`,
+`UNBOUND_AGENT`, `UNKNOWN_CONFIG_KEY`, `CATALOG_TOOL_DRIFT`.
+
+## GitHub publishing (Increment 4)
+
+### `GET /github/auth-url` (Architect+)
+Start the OAuth dance. Returns `{ "url": "https://github.com/login/oauth/authorize?…" }`.
+The client opens the URL in a popup; GitHub redirects to `/github/callback`
+which stores the sealed token and postMessages the result back.
+
+### `GET /github/status` (Viewer+)
+`{ "connected": true, "login": "octo-user", "scopes": ["repo"], "publications": [ … ] }`
+— never exposes the token.
+
+### `DELETE /github/connection` (Owner)
+Disconnect the org's GitHub account.
+
+### `POST /projects/:id/publish` (Architect+, **Team tier**)
+Pre-flight → codegen (typed interfaces + CI + fallback handlers) →
+scaffold `spec.yaml`/`workflow.json` → create repo → git-data push (4
+requests, <5s SLA) → publication ledger.
+
+```json
+// request
+{ "repoName": "weekly-newsletter", "description": "", "private": true, "branch": "main" }
+// 200 response
+{
+  "repoUrl": "https://github.com/octo-user/weekly-newsletter",
+  "sha": "…", "branch": "main", "latencyMs": 812, "fileCount": 10,
+  "summary": "Published 10 files to octo-user/weekly-newsletter in 812ms",
+  "publication": { "id": "…", "repoName": "weekly-newsletter", "repoUrl": "…", "fileCount": 10, "latencyMs": 812, "createdAt": "…" }
+}
+```
+
+`402 PAYMENT_REQUIRED` on the Free tier (Team subscription or trial
+required). `422 PREFLIGHT_FAILED` with the error list when the workflow
+does not pass the gate.
+
+## Stripe billing & entitlements (Increment 4)
+
+### `GET /billing` (Viewer+)
+Subscription state: `{ plan, status, statusLabel, trialEnd, currentPeriodEnd, cancelAtPeriodEnd }`.
+Status machine: `none → trialing → active → past_due → canceled` (+
+`incomplete` while 3DS is pending). Unknown statuses fail closed to `none`.
+
+### `GET /billing/entitlement` (Viewer+)
+The effective tier + quota:
+```json
+{
+  "orgId": "…", "tier": "free", "label": "Free",
+  "limits": { "grillSessionsPerMonth": 10, "exports": false, "unlimitedGrill": false, "preview": "mock" },
+  "usage": { "grillSessionsThisMonth": 3 },
+  "billing": { "plan": "free", "status": "none", "trialEnd": null, "currentPeriodEnd": null }
+}
+```
+Team/trial: `grillSessionsPerMonth: null`, `exports: true`, `preview: "simulated"`.
+
+### `POST /billing/checkout` (Architect+)
+```json
+// request
+{ "successUrl": "https://workflow-builders.com/?billing=success", "cancelUrl": "…", "tierId": "team" }
+// 200 response
+{ "url": "https://checkout.stripe.com/c/pay/…", "sessionId": "cs_…" }
+```
+`503 BILLING_NOT_CONFIGURED` when Stripe is not configured.
+
+### `POST /billing/portal` (Architect+)
+`{ "url": "https://billing.stripe.com/p/session/…" }` — `409 NO_CUSTOMER`
+if the org has no Stripe customer yet.
+
+### `POST /billing/webhook` (public)
+Stripe delivers events here. The RAW body is signature-verified against
+`stripe-signature` (`400 INVALID_SIGNATURE` on failure), event ids are
+deduplicated in the `billing_events` ledger (replays are acked, never
+re-applied), and subscription state is re-fetched from Stripe so
+out-of-order delivery cannot regress the row.
+
+## Telemetry (Increment 4)
+
+### `POST /telemetry/events` (Viewer+)
+```json
+// request
+{ "event": "lens_selected", "props": { "source": "nuwa-skill" } }
+// 200 response
+{ "captured": true, "event": "lens_selected" }
+```
+Properties are filtered through an allowlist server-side (prompt text, API
+keys and free-form content are dropped) and the org id is pseudonymized
+(truncated sha256) before anything is stored or sent to PostHog.
+
+## Quota & payment error codes
+
+| Code | Status | Meaning |
+|------|--------|---------|
+| `QUOTA_EXCEEDED` | 402 | Free plan's 10 Grill sessions/month consumed |
+| `PAYMENT_REQUIRED` | 402 | Export/unlimited loops need Team or trial |
+| `GITHUB_NOT_CONNECTED` | 401 | Connect a GitHub account (repo scope) first |
+| `GITHUB_AUTH_REQUIRED` | 401 | Stored token rejected — re-authenticate (request state is preserved) |
+| `PREFLIGHT_FAILED` | 422 | Workflow failed the pre-flight gate (`details.errors` lists each) |
+| `INVALID_SIGNATURE` | 400 | Stripe webhook signature verification failed |
+| `BILLING_NOT_CONFIGURED` | 503 | Stripe not configured on this deployment |

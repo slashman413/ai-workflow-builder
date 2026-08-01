@@ -79,6 +79,33 @@
  *     Live readiness probe for GET /api/health. Must never throw: a broken
  *     store returns { ok: false, error } so the endpoint can answer 503.
  *
+ * Increment 4 repository ports (both adapters implement all of these):
+ *
+ * BillingRepository:
+ *   getByOrg(orgId)                  -> billing row | null
+ *   upsert(orgId, record)            -> billing row   // webhook-upserted
+ *   listEvents(orgId)                -> event rows (ascending received_at)
+ *   recordEvent({ eventId, eventType, orgId }) -> boolean
+ *     TRUE when the event was NEW (side effects should run); FALSE on a
+ *     PRIMARY-KEY collision (at-least-once replay — ack and skip).
+ *
+ * UsageRepository (monthly quota counters):
+ *   increment(orgId, metric, period, amount=1) -> new total
+ *   count(orgId, metric, period)               -> integer
+ *
+ * GithubConnectionRepository:
+ *   get(orgId)                      -> { orgId, login, tokenSealed, scopes } | null
+ *   upsert(orgId, { login, tokenSealed, scopes }) -> row
+ *   remove(orgId)                   -> boolean
+ *
+ * PublicationRepository (publish ledger):
+ *   record(row)                     -> row
+ *   listByOrg(orgId)                -> rows (newest first)
+ *   listByProject(orgId, projectId) -> rows (newest first)
+ *
+ * TelemetryRepository:
+ *   insert({ orgHash, event, props }) -> boolean   // pseudonymous local log
+ *
  * A Project bundles the raw prompt, the grill answers gathered so far, and the
  * derived spec snapshot:
  *   Project = { id, orgId, prompt, answers: Record<string,string>,

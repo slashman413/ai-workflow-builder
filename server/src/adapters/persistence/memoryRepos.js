@@ -272,6 +272,164 @@ export function createMemoryRepos() {
     hasCatalog(source) {
       return catalogs.has(source) && (catalogs.get(source)?.agents?.length > 0 || catalogs.get(source)?.lenses?.length > 0);
     },
+    /** Global tool allow-list from the latest good agency-agents payload. */
+    listTools() {
+      const payload = catalogs.get('agency-agents');
+      if (!payload?.tools) return [];
+      return payload.tools
+        .map((t) => (typeof t === 'string' ? { id: t } : { id: t?.id, label: t?.label, short: t?.short, icon: t?.icon }))
+        .filter((t) => t.id)
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    },
+  };
+
+  // ---------------------------------------------------------------------------
+  // Billing (Increment 4) — one row per org; the webhook layer upserts, the
+  // API surface reads. `recordEvent` is the idempotency ledger: Stripe
+  // delivers webhooks at-least-once, and a replay must be ack'd without
+  // re-applying side effects. Returns true only on FIRST insert.
+  // ---------------------------------------------------------------------------
+  /** @type {Map<string, object>} orgId -> billing row */
+  const billing = new Map();
+  /** @type {Map<string, object>} eventId -> event row */
+  const billingEvents = new Map();
+
+  const billingRepo = {
+    getByOrg(orgId) {
+      const row = billing.get(orgId);
+      return row ? clone(row) : null;
+    },
+    upsert(orgId, record) {
+      const now = new Date().toISOString();
+      const existing = billing.get(orgId);
+      const row = {
+        orgId,
+        stripeCustomerId: record.stripeCustomerId ?? existing?.stripeCustomerId ?? null,
+        stripeSubscriptionId: record.stripeSubscriptionId ?? existing?.stripeSubscriptionId ?? null,
+        plan: record.plan ?? existing?.plan ?? 'free',
+        status: record.status ?? existing?.status ?? 'none',
+        currentPeriodEnd: record.currentPeriodEnd ?? existing?.currentPeriodEnd ?? null,
+        trialEnd: record.trialEnd ?? existing?.trialEnd ?? null,
+        cancelAtPeriodEnd: record.cancelAtPeriodEnd ?? existing?.cancelAtPeriodEnd ?? false,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      billing.set(orgId, row);
+      return clone(row);
+    },
+    listEvents(orgId) {
+      return [...billingEvents.values()]
+        .filter((e) => e.orgId === orgId)
+        .map(clone)
+        .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
+    },
+    /** @returns {boolean} true when the event was NEW (side effects should run). */
+    recordEvent({ eventId, eventType, orgId = null }) {
+      if (billingEvents.has(eventId)) return false;
+      billingEvents.set(eventId, { eventId, eventType, orgId, receivedAt: new Date().toISOString() });
+      return true;
+    },
+  };
+
+  // ---------------------------------------------------------------------------
+  // GitHub publishing (Increment 4) — OAuth connections (sealed tokens) and
+  // the publication ledger.
+  // ---------------------------------------------------------------------------
+  /** @type {Map<string, object>} orgId -> connection */
+  const githubConnections = new Map();
+  /** @type {Map<string, object>} id -> publication */
+  const publications = new Map();
+
+  const githubConnectionsRepo = {
+    get(orgId) {
+      const row = githubConnections.get(orgId);
+      return row ? clone(row) : null;
+    },
+    upsert(orgId, { login, tokenSealed, scopes }) {
+      const now = new Date().toISOString();
+      const existing = githubConnections.get(orgId);
+      const row = {
+        orgId,
+        login,
+        tokenSealed,
+        scopes: Array.isArray(scopes) ? scopes : [],
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      githubConnections.set(orgId, row);
+      return clone(row);
+    },
+    remove(orgId) {
+      return githubConnections.delete(orgId);
+    },
+  };
+
+  const publicationsRepo = {
+    record(record) {
+      const now = new Date().toISOString();
+      const row = {
+        id: record.id ?? randomUUID(),
+        orgId: record.orgId,
+        projectId: record.projectId,
+        repoOwner: record.repoOwner,
+        repoName: record.repoName,
+        repoUrl: record.repoUrl,
+        private: Boolean(record.private),
+        fileCount: record.fileCount,
+        latencyMs: record.latencyMs,
+        workflowHash: record.workflowHash,
+        createdAt: record.createdAt ?? now,
+      };
+      publications.set(row.id, row);
+      return clone(row);
+    },
+    listByOrg(orgId) {
+      return [...publications.values()]
+        .filter((p) => p.orgId === orgId)
+        .map(clone)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    },
+    listByProject(orgId, projectId) {
+      return [...publications.values()]
+        .filter((p) => p.orgId === orgId && p.projectId === projectId)
+        .map(clone)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    },
+  };
+
+  // ---------------------------------------------------------------------------
+  // Increment 4 (continuation): monthly usage quotas + local privacy-safe
+  // telemetry log (mirrors the SQLite adapter — migration 0008).
+  // ---------------------------------------------------------------------------
+  /** @type {Map<string, object>} `${orgId}:${metric}:${period}` -> counter */
+  const usage = new Map();
+
+  const usageRepo = {
+    /** Increment a monthly counter (upsert) and return the new total. */
+    increment(orgId, metric, period, amount = 1) {
+      const key = `${orgId}:${metric}:${period}`;
+      const current = usage.get(key)?.amount ?? 0;
+      usage.set(key, { orgId, metric, period, amount: current + amount });
+      return current + amount;
+    },
+    count(orgId, metric, period) {
+      return usage.get(`${orgId}:${metric}:${period}`)?.amount ?? 0;
+    },
+  };
+
+  /** @type {Map<string, object>} id -> telemetry row */
+  const telemetry = new Map();
+
+  const telemetryRepo = {
+    insert({ orgHash, event, props = {} }) {
+      const row = { id: randomUUID(), orgHash, event, props: clone(props), createdAt: new Date().toISOString() };
+      telemetry.set(row.id, row);
+      return true;
+    },
+    /** Test/diagnostics surface: raw rows (never exposed over HTTP). */
+    list() {
+      return [...telemetry.values()].map(clone);
+    },
   };
 
   return {
@@ -280,6 +438,11 @@ export function createMemoryRepos() {
     grillSessions: grillSessionsRepo,
     vaultKeys: vaultKeysRepo,
     catalog: catalogRepo,
+    billing: billingRepo,
+    githubConnections: githubConnectionsRepo,
+    publications: publicationsRepo,
+    usage: usageRepo,
+    telemetry: telemetryRepo,
     /** Readiness probe for GET /api/health — always ready, zero latency. */
     ping() {
       return { ok: true, latencyMs: 0 };

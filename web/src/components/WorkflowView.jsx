@@ -17,6 +17,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { api } from '../api/client.js';
 import { DND_MIME } from './MarketplaceSidebar.jsx';
+import { GithubExportPanel } from './GithubExportPanel.jsx';
 
 /**
  * WorkflowView.jsx — the interactive visual graph canvas (Increment 3).
@@ -142,11 +143,12 @@ function WorkflowNode({ data, selected }) {
 
 const nodeTypes = { wfb: WorkflowNode };
 
-function Canvas({ workflow, projectId, canEdit, onReset }) {
+function Canvas({ workflow, projectId, canEdit, onReset, entitlement, onEntitlementChanged }) {
   const { screenToFlowPosition } = useReactFlow();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [simResult, setSimResult] = useState(null);
+  const [preflight, setPreflight] = useState(null);
   const [message, setMessage] = useState(null);
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState(null);
@@ -159,6 +161,7 @@ function Canvas({ workflow, projectId, canEdit, onReset }) {
     setNodes(rfNodes);
     setEdges(rfEdges);
     setSimResult(null);
+    setPreflight(null);
     setMessage(null);
     setSelected(null);
   }, [workflow?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -243,6 +246,13 @@ function Canvas({ workflow, projectId, canEdit, onReset }) {
     setSimResult(await api.simulate(wf));
   });
 
+  // Static pre-flight AST validation (Increment 4) — cycles, reachability,
+  // schema, tool boundaries, security. Blocks exports, informs the editor.
+  const checkPreflight = guard(async () => {
+    const wf = toWorkflow(nodes, edges, workflowRef.current);
+    setPreflight(await api.preflight(wf));
+  });
+
   return (
     <section className="card canvas-card">
       <div className="canvas-head">
@@ -283,10 +293,34 @@ function Canvas({ workflow, projectId, canEdit, onReset }) {
           <>
             <button type="button" onClick={save}>Save workflow</button>
             <button type="button" className="ghost" onClick={simulate}>Simulate (safe preview)</button>
+            <button type="button" className="ghost" onClick={checkPreflight}>Pre-flight check</button>
           </>
         )}
         <button type="button" className="ghost" onClick={onReset}>Start over</button>
       </div>
+
+      {preflight && (
+        <div className={`sim-result ${preflight.valid ? '' : 'preflight-fail'}`}>
+          <h3>
+            Pre-flight {preflight.valid ? '✓' : '✗'} — {preflight.summary}
+            {' '}(security boundary: {preflight.security?.boundary})
+          </h3>
+          {preflight.errors?.length > 0 && (
+            <ul className="sim-errors">
+              {preflight.errors.map((e, i) => (
+                <li key={i}><strong>{e.code}</strong>{e.nodeId ? ` (${e.nodeId})` : ''}: {e.message}</li>
+              ))}
+            </ul>
+          )}
+          {preflight.warnings?.length > 0 && (
+            <ul className="preflight-warnings">
+              {preflight.warnings.map((w, i) => (
+                <li key={i}><strong>{w.code}</strong>{w.nodeId ? ` (${w.nodeId})` : ''}: {w.message}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {simResult && (
         <div className="sim-result">
@@ -337,6 +371,13 @@ function Canvas({ workflow, projectId, canEdit, onReset }) {
           </dl>
         </div>
       )}
+
+      <GithubExportPanel
+        projectId={projectId}
+        canEdit={canEdit}
+        entitlement={entitlement}
+        onEntitlementChanged={onEntitlementChanged}
+      />
     </section>
   );
 }

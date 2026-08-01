@@ -24,6 +24,7 @@ import { WorkflowView } from './components/WorkflowView.jsx';
 import { MarketplaceSidebar } from './components/MarketplaceSidebar.jsx';
 import { VaultPanel } from './components/VaultPanel.jsx';
 import { RoleGate } from './components/RoleGate.jsx';
+import { BillingBadge } from './components/BillingBadge.jsx';
 import { hasRole } from './auth/roles.js';
 
 export function App() {
@@ -34,6 +35,7 @@ export function App() {
   const [workflow, setWorkflow] = useState(null);
   const [projects, setProjects] = useState([]);
   const [activeLensId, setActiveLensId] = useState(null);
+  const [entitlement, setEntitlement] = useState(null);
   const [error, setError] = useState(null);
 
   const canWrite = isSignedIn && hasRole(role?.name, 'architect');
@@ -47,12 +49,18 @@ export function App() {
       setWorkflow(null);
       setStage('prompt');
       setProjects([]);
+      setEntitlement(null);
       return;
     }
     api
       .listProjects()
       .then(setProjects)
       .catch(() => setProjects([]));
+    // Increment 4: the org's effective plan + usage quota (badge + gates).
+    api.billing
+      .entitlement()
+      .then(setEntitlement)
+      .catch(() => setEntitlement(null));
   }, [isSignedIn, orgId]);
 
   const guard = (fn) => async (...args) => {
@@ -64,8 +72,13 @@ export function App() {
     }
   };
 
+  const refreshEntitlement = guard(async () => {
+    setEntitlement(await api.billing.entitlement());
+  });
+
   const start = guard(async (prompt) => {
     const p = await api.createProject(prompt);
+    api.telemetry.capture('project_created', { count: 1 }).catch(() => {});
     setProject(p);
     setGrill(await api.grill(p.id));
     setWorkflow(null);
@@ -101,6 +114,12 @@ export function App() {
     setError(null);
   };
 
+  const selectLens = (lensId) => {
+    setActiveLensId(lensId);
+    // Privacy-safe funnel analytics — the server allowlists props.
+    if (lensId) api.telemetry.capture('lens_selected', { source: 'nuwa-skill' }).catch(() => {});
+  };
+
   return (
     <main className="app">
       <header>
@@ -112,13 +131,15 @@ export function App() {
 
       {error && <div className="error" role="alert">{error}</div>}
 
+      {isSignedIn && <BillingBadge onChanged={refreshEntitlement} />}
+
       {isSignedIn && (
         <RoleGate min="viewer">
           <div className="workspace">
             <MarketplaceSidebar
               canEdit={canWrite}
               activeLensId={activeLensId}
-              onSelectLens={setActiveLensId}
+              onSelectLens={selectLens}
             />
 
             <div className="workspace-main">
@@ -169,6 +190,8 @@ export function App() {
               projectId={project.id}
               canEdit={canWrite}
               onReset={reset}
+              entitlement={entitlement}
+              onEntitlementChanged={refreshEntitlement}
             />
           )}
 

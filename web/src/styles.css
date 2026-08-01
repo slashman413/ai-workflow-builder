@@ -322,3 +322,97 @@ button.danger { color: var(--danger); border-color: #5a2a2a; }
   .marketplace { position: static; max-height: none; }
   .canvas-pane { height: 420px; }
 }
+
+/* --- Increment 4: billing badge + GitHub export panel -------------------- */
+
+.billing-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  margin: 10px 0;
+  border: 1px solid var(--border, #3a3f4b);
+  border-radius: 10px;
+  background: var(--panel, #161a22);
+  font-size: 0.9rem;
+}
+.billing-tier {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.tier-free .billing-tier { color: #9aa0ab; }
+.tier-trial .billing-tier { color: #8ecdf8; }
+.tier-team .billing-tier { color: #f5c044; }
+.billing-quota { color: #9aa0ab; }
+.billing-upgrade {
+  margin-left: auto;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 8px;
+  background: #f5c044;
+  color: #161a22;
+  font-weight: 700;
+  cursor: pointer;
+}
+.billing-upgrade:hover { filter: brightness(1.1); }
+.billing-upgrade:disabled { opacity: 0.6; cursor: wait; }
+.billing-manage { margin-left: auto; }
+.billing-error { color: #ff8a8a; }
+
+.export-panel { margin-top: 18px; }
+.export-panel .canvas-head { margin-bottom: 8px; }
+.paywall {
+  border: 1px dashed #f5c044;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 10px 0;
+  background: rgba(245, 192, 68, 0.06);
+}
+.paywall .billing-upgrade { margin-left: 0; margin-top: 8px; }
+.export-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+.export-form input[type='text'] {
+  flex: 1 1 260px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #3a3f4b;
+  background: #10141b;
+  color: inherit;
+}
+.export-private {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #c8cdd6;
+  font-size: 0.9rem;
+}
+button.link {
+  background: none;
+  border: none;
+  color: #8ecdf8;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+.preflight-fail h3 { color: #ff8a8a; }
+.preflight-warnings {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  color: #e8c46a;
+  font-size: 0.9rem;
+}
+.pub-ledger {
+  margin-top: 12px;
+  font-size: 0.9rem;
+  color: #c8cdd6;
+}
+.pub-ledger summary { cursor: pointer; color: #8ecdf8; }
+.pub-ledger ul { margin: 8px 0 0; padding-left: 18px; }
+.pub-ledger a { color: #8ecdf8; }

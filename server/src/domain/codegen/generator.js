@@ -9,14 +9,27 @@
  * Node type → Python function mapping:
  *   input   → data loading (file path, URL, API, or user input)
  *   agent   → LLM call via the openai (or anthropic) client, keyed off
- *             OPENAI_API_KEY / ANTHROPIC_API_KEY
+ *             OPENAI_API_KEY / ANTHROPIC_API_KEY, wrapped in a retry +
+ *             fallback handler so a transient provider outage degrades
+ *             gracefully instead of aborting the run
  *   tool    → rule checks (constraints / success criteria)
  *   branch  → edge-case handling with try/except
  *   output  → deliver results (file, email draft, webhook)
  *
- * The generated `main.py` embeds a `NODES` registry in topological order and
- * a `main()` executor that threads results through a shared context dict, so
- * the compiled project is runnable as-is and unit-testable with pytest.
+ * Increment 4 additions:
+ *   - interfaces.py        — typed interfaces (WorkflowContext, NodeSpec,
+ *                            per-node-type result contracts, WorkflowFn)
+ *   - fallback handlers    — LLM retry with backoff + per-node fallback text;
+ *                            `main(continue_on_error=True)` converts ANY node
+ *                            failure into a recorded error entry
+ *   - .github/workflows/ci.yml + .gitignore — the generated project is CI-
+ *                            ready out of the box (used by the GitHub
+ *                            publisher)
+ *
+ * The generated `main.py` embeds a typed `NODES` registry in topological
+ * order and a `main()` executor that threads results through a shared context
+ * dict, so the compiled project is runnable as-is and unit-testable with
+ * pytest.
  */
 
 import { validateWorkflow } from '../workflow/validateWorkflow.js';
@@ -51,10 +64,13 @@ export function generate({ spec = {}, workflow } = {}) {
 
   const files = {
     'main.py': renderMainPy({ workflow, spec, plan, providers }),
+    'interfaces.py': renderInterfacesPy(),
     'tests/test_workflow.py': renderTestsPy({ plan, providers }),
     'requirements.txt': renderRequirements(providers),
     'README.md': renderReadme({ workflow, spec, plan }),
     '.env.example': renderEnvExample(providers),
+    '.gitignore': renderGitignore(),
+    '.github/workflows/ci.yml': renderCIPy(),
   };
 
   const agents = workflow.nodes.filter((n) => n.type === 'agent').length;
@@ -176,16 +192,30 @@ import logging
 import os
 import re
 import sys
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 ${providerImports}
 
+from interfaces import NodeSpec, WorkflowContext, WorkflowFn
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("workflow")
 
 OUTPUTS_DIR = Path("outputs")
+
+# --- Resilience knobs -------------------------------------------------------
+# Agent nodes retry transient LLM failures LLM_MAX_RETRIES times with a short
+# backoff, then degrade to the node's fallback (config.fallback, or
+# DEFAULT_AGENT_FALLBACK) so a single provider outage does not abort the whole
+# run. For hard failures (any node type), main(continue_on_error=True) — also
+# --continue-on-error on the CLI — records the error in ctx and keeps
+# executing the remaining nodes.
+LLM_MAX_RETRIES = 2
+RETRY_BACKOFF_SECONDS = 2
+DEFAULT_AGENT_FALLBACK = "Agent unavailable after {attempts} attempts — objective not completed."
 
 
 def _serialize(value: Any) -> str:
@@ -242,15 +272,72 @@ def _write_target(target: str, ctx: dict[str, Any]) -> str:
     return "file written to {}".format(path)
 
 
+def _call_openai(
+    client: Any,
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float,
+    fallback: str | None = None,
+) -> str:
+    """Call chat.completions with retry + fallback so a transient provider
+    failure degrades gracefully instead of aborting the workflow."""
+    for attempt in range(1, LLM_MAX_RETRIES + 1):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+            )
+            return response.choices[0].message.content or ""
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("openai call failed (attempt %d/%d): %s", attempt, LLM_MAX_RETRIES, exc)
+            if attempt < LLM_MAX_RETRIES:
+                time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+    if fallback is not None:
+        logger.error("openai unavailable — using fallback response")
+        return fallback
+    raise RuntimeError("openai call failed after {} attempts".format(LLM_MAX_RETRIES))
+
+
+def _call_anthropic(
+    client: Any,
+    *,
+    model: str,
+    max_tokens: int,
+    messages: list[dict[str, str]],
+    fallback: str | None = None,
+) -> str:
+    """Call messages.create with retry + fallback (Anthropic provider)."""
+    for attempt in range(1, LLM_MAX_RETRIES + 1):
+        try:
+            response = client.messages.create(model=model, max_tokens=max_tokens, messages=messages)
+            return "".join(getattr(part, "text", "") for part in response.content)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("anthropic call failed (attempt %d/%d): %s", attempt, LLM_MAX_RETRIES, exc)
+            if attempt < LLM_MAX_RETRIES:
+                time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+    if fallback is not None:
+        logger.error("anthropic unavailable — using fallback response")
+        return fallback
+    raise RuntimeError("anthropic call failed after {} attempts".format(LLM_MAX_RETRIES))
+
+
 ${functions}
 
 
 # Node registry — plain data so tests can introspect the workflow graph.
-NODES: list[dict[str, Any]] = [${registry}]
+# Typed via NodeSpec (see interfaces.py): { id, type, name, function_name, config }.
+NODES: list[NodeSpec] = [${registry}]
 
 
-def main() -> dict[str, Any]:
-    """Execute every node in topological order, sharing results through ctx."""
+def main(continue_on_error: bool = False) -> dict[str, Any]:
+    """Execute every node in topological order, sharing results through ctx.
+
+    By default any node failure aborts the run (fail loud). With
+    continue_on_error=True the failure is recorded in ctx under the node id
+    and the remaining nodes still execute — the workflow-level fallback.
+    """
     ctx: dict[str, Any] = {}
     for node in NODES:
         function = globals()[node["function_name"]]
@@ -259,12 +346,15 @@ def main() -> dict[str, Any]:
             ctx[node["id"]] = function(ctx)
         except Exception as exc:  # noqa: BLE001
             logger.exception("node %s failed", node["id"])
-            raise SystemExit("workflow aborted at {}: {}".format(node["id"], exc)) from exc
+            if not continue_on_error:
+                raise SystemExit("workflow aborted at {}: {}".format(node["id"], exc)) from exc
+            ctx[node["id"]] = {"node_id": node["id"], "error": str(exc)}
     return ctx
 
 
 if __name__ == "__main__":
-    result = main()
+    continue_on_error = "--continue-on-error" in sys.argv
+    result = main(continue_on_error=continue_on_error)
     if "--json" in sys.argv:
         print(_serialize(result))
     else:
@@ -323,6 +413,12 @@ function renderAgentFn(entry) {
         objective=${pyString(objective)},
         context=_serialize(ctx),
     )`;
+  // Fallback handler: config.fallback wins; otherwise the module default
+  // (formatted with the retry budget) so a provider outage never aborts the
+  // workflow silently.
+  const fallback = config.fallback
+    ? pyString(config.fallback)
+    : `DEFAULT_AGENT_FALLBACK.format(attempts=LLM_MAX_RETRIES)`;
 
   if (provider === 'anthropic') {
     const anthropicModel =
@@ -331,31 +427,29 @@ function renderAgentFn(entry) {
     """${doc}"""
 ${promptLines}
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    response = client.messages.create(
+    return _call_anthropic(
+        client,
         model=${anthropicModel},
         max_tokens=${config.maxTokens ?? 1024},
         messages=[{"role": "user", "content": prompt}],
-    )
-    content = "".join(getattr(part, "text", "") for part in response.content)
-    logger.info("agent node %s returned %d characters", ${pyString(node.id)}, len(content))
-    return content`;
+        fallback=${fallback},
+    )`;
   }
 
   return String.raw`def ${functionName}(ctx: dict[str, Any]) -> str:
     """${doc}"""
 ${promptLines}
     client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-    response = client.chat.completions.create(
+    return _call_openai(
+        client,
         model=${model},
         messages=[
             {"role": "system", "content": ${systemPrompt}},
             {"role": "user", "content": prompt},
         ],
         temperature=${temperature},
-    )
-    content = response.choices[0].message.content or ""
-    logger.info("agent node %s returned %d characters", ${pyString(node.id)}, len(content))
-    return content`;
+        fallback=${fallback},
+    )`;
 }
 
 function renderToolFn(entry) {
@@ -428,6 +522,121 @@ function renderNodeRegistry(entries) {
 }
 
 /* ---------------------------------------------------------------------------
+ * interfaces.py — typed interfaces for the generated project
+ * ------------------------------------------------------------------------ */
+
+function renderInterfacesPy() {
+  return `"""Typed interfaces for the generated workflow project.
+
+These contracts are the typed surface of every node: node functions receive
+the shared WorkflowContext and return a NodeResult, the NODES registry is a
+list of NodeSpec, and WorkflowFn is the callable protocol every node function
+implements. Tooling, type checkers (mypy / pyright) and tests can rely on
+these shapes.
+"""
+
+from typing import Any, Protocol, TypedDict, TypeAlias
+
+
+class WorkflowContext(TypedDict, total=False):
+    """Shared execution context — every node's result lands under its node id."""
+
+
+class InputNodeResult(TypedDict):
+    """Result contract of an input node."""
+
+    collected: dict[str, Any]
+
+
+AgentNodeResult: TypeAlias = str
+"""Result contract of an agent node — the LLM's text output."""
+
+
+class ToolNodeResult(TypedDict):
+    """Result contract of a tool (rule-check) node."""
+
+    results: dict[str, bool]
+    passed: bool
+
+
+class BranchNodeReport(TypedDict):
+    """Result contract of a branch (edge-case) node."""
+
+    node_id: str
+    errors: list[str]
+    warnings: list[str]
+
+
+class OutputNodeResult(TypedDict):
+    """Result contract of an output node."""
+
+    delivered: dict[str, str]
+
+
+NodeResult: TypeAlias = Any
+"""Union of every node result contract (Any keeps the registry simple)."""
+
+
+class NodeSpec(TypedDict):
+    """One entry of the NODES registry — plain data, introspectable."""
+
+    id: str
+    type: str
+    name: str
+    function_name: str
+    config: dict[str, Any]
+
+
+class WorkflowFn(Protocol):
+    """The callable contract every node function implements."""
+
+    def __call__(self, ctx: WorkflowContext) -> NodeResult: ...
+`;
+}
+
+/* ---------------------------------------------------------------------------
+ * .gitignore / CI
+ * ------------------------------------------------------------------------ */
+
+function renderGitignore() {
+  return `.venv/
+__pycache__/
+*.pyc
+.env
+outputs/
+.pytest_cache/
+`;
+}
+
+/** GitHub Actions CI for the generated project (plain strings — no template escapes). */
+function renderCIPy() {
+  return [
+    'name: CI',
+    '',
+    'on:',
+    '  push:',
+    '  pull_request:',
+    '',
+    'jobs:',
+    '  test:',
+    '    runs-on: ubuntu-latest',
+    '    strategy:',
+    '      matrix:',
+    '        python-version: ["3.10", "3.11", "3.12"]',
+    '    steps:',
+    '      - uses: actions/checkout@v4',
+    '      - uses: actions/setup-python@v5',
+    '        with:',
+    '          python-version: ${{ matrix.python-version }}',
+    '      - name: Install dependencies',
+    '        run: pip install -r requirements.txt',
+    '      - name: Run tests',
+    '        run: python -m pytest -q',
+    '',
+  ].join('\n');
+}
+
+/* ---------------------------------------------------------------------------
  * tests/test_workflow.py
  * ------------------------------------------------------------------------ */
 
@@ -494,6 +703,20 @@ def test_agent_node_returns_openai_message_content(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(main, "openai", fake_openai)
     result = node_function("agent")({})
     assert result == "agent answer"`);
+
+    tests.push(`
+
+def test_agent_node_falls_back_when_llm_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Agent nodes degrade to the configured fallback after retries fail."""
+    def boom(*args: Any, **kwargs: Any) -> Any:
+        raise ConnectionError("provider down")
+
+    fake_openai = mock.Mock()
+    fake_openai.OpenAI.return_value.chat.completions.create.side_effect = boom
+    monkeypatch.setattr(main, "openai", fake_openai)
+    monkeypatch.setattr(main.time, "sleep", lambda _: None)  # no real backoff in tests
+    result = node_function("agent")({})
+    assert result == main.DEFAULT_AGENT_FALLBACK.format(attempts=main.LLM_MAX_RETRIES)`);
   }
 
   if (providers.has('anthropic')) {
@@ -554,6 +777,27 @@ def test_output_nodes_deliver_to_targets(tmp_path: Path, monkeypatch: pytest.Mon
     assert isinstance(result, dict)
     assert main.OUTPUTS_DIR.exists()`);
   }
+
+  tests.push(`
+
+def test_main_continue_on_error_records_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With continue_on_error=True a failing node is recorded, not fatal."""
+    def boom(ctx: dict[str, Any]) -> Any:
+        raise RuntimeError("boom")
+
+    target = main.NODES[0]["function_name"]
+    monkeypatch.setattr(main, target, boom)
+    result = main.main(continue_on_error=True)
+    assert "error" in result[main.NODES[0]["id"]]
+    assert len(result) == len(main.NODES)
+
+
+def test_types_module_exposes_typed_interfaces() -> None:
+    """The project ships typed node interfaces (interfaces.py)."""
+    import interfaces as typed_interfaces
+
+    for name in ("WorkflowContext", "NodeSpec", "WorkflowFn", "NodeResult"):
+        assert hasattr(typed_interfaces, name)`);
 
   return String.raw`"""Tests for the generated workflow executor.
 
@@ -643,9 +887,12 @@ ${outputs}
 | File | Purpose |
 |------|---------|
 | \`main.py\` | Single-file workflow executor (run this) |
+| \`types.py\` | Typed interfaces for the node contracts (mypy/pyright friendly) |
 | \`tests/test_workflow.py\` | pytest suite covering every node type |
 | \`requirements.txt\` | Python dependencies |
 | \`.env.example\` | Environment variable template (API keys) |
+| \`.github/workflows/ci.yml\` | GitHub Actions CI (install + pytest on 3.10–3.12) |
+| \`.gitignore\` | Python project hygiene |
 
 ## Node → function map
 
@@ -656,6 +903,19 @@ ${rows}
 Each function receives the shared context \`ctx\` (results of every upstream
 node, keyed by node id) and returns its own result, which \`main()\` stores
 back into \`ctx\`. The executor runs nodes in topological order.
+
+## Resilience & fallbacks
+
+- **LLM retries**: agent nodes retry transient provider failures up to
+  \`LLM_MAX_RETRIES\` times with a short backoff.
+- **Agent fallback**: when the provider is still down, the node returns its
+  configured \`fallback\` (or \`DEFAULT_AGENT_FALLBACK\`) instead of aborting —
+  the failure is logged loudly, the run continues.
+- **Workflow fallback**: \`main(continue_on_error=True)\` (or
+  \`python main.py --continue-on-error\`) converts ANY node failure into a
+  recorded \`{"node_id": …, "error": …}\` entry in \`ctx\` and keeps executing.
+  Default behavior fails loud — an aborted run is a visible incident, not a
+  silent partial result.
 
 ## Setup
 
@@ -678,6 +938,7 @@ export OPENAI_API_KEY=sk-...        # required for agent nodes
 \`\`\`bash
 python main.py            # human-readable log output
 python main.py --json     # machine-readable JSON on stdout
+python main.py --continue-on-error  # record failures instead of aborting
 \`\`\`
 
 Outputs land in \`outputs/\` (files and email drafts). Webhook targets POST
@@ -690,7 +951,7 @@ pytest
 \`\`\`
 
 The suite mocks the LLM clients, so it runs without API keys or network
-access.
+access. CI (GitHub Actions) runs the same suite on Python 3.10–3.12.
 `;
 }
 

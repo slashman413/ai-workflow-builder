@@ -41,6 +41,25 @@ container health check against `/api/health`.
 | `CORS_ORIGINS` | — | Comma-separated override (e.g. add a staging/preview origin). |
 | `USE_MEMORY` | — | `1` = non-persistent in-memory repo (not for production). |
 
+#### Secrets (Increment 4 — billing, publishing, analytics)
+
+| Var | Required? | Purpose |
+|-----|-----------|---------|
+| `CLERK_SECRET_KEY` | Yes (production) | Session JWT verification (`AUTH_MODE=clerk`). |
+| `VAULT_KEK` | Yes (production) | 32-byte base64 envelope key — seals LLM keys AND GitHub OAuth tokens. |
+| `STRIPE_SECRET_KEY` | For billing | Enables live Stripe checkout + subscription webhooks. |
+| `STRIPE_WEBHOOK_SECRET` | For billing | `whsec_…` — webhook signature verification (raw-body route). |
+| `STRIPE_TEAM_PRICE_ID` | For billing | The Team tier price (test mode: `price_…` from the dashboard). |
+| `GITHUB_CLIENT_ID` | For publishing | GitHub OAuth app id (repo scope). |
+| `GITHUB_CLIENT_SECRET` | For publishing | GitHub OAuth app secret. |
+| `GITHUB_REDIRECT_URI` | — | OAuth callback (default `${API_ORIGIN}/api/github/callback`). |
+| `POSTHOG_API_KEY` | — | PostHog product analytics (privacy-preserving; without it, captures are local-only no-ops). |
+
+Billing, publishing and analytics all **fail closed**: with a secret missing
+the corresponding feature answers `503 NOT_CONFIGURED` (billing), the OAuth
+dance refuses to start (publishing), and telemetry silently stays
+local-only — the app never crashes and never degrades security.
+
 ### Build & run locally
 
 ```bash

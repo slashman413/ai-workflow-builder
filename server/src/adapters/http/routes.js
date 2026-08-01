@@ -25,6 +25,7 @@ import { readFileSync } from 'node:fs';
 import { Router } from 'express';
 import { AppError } from '../../application/projectService.js';
 import { simulateWorkflow } from '../../domain/executor/simulation.js';
+import { preflightWorkflow } from '../../domain/workflow/preflight.js';
 import { STREAM_LIMITS } from '../../application/grillStreamService.js';
 
 // Read the service identity once at load time so the health probe stays a pure
@@ -45,12 +46,16 @@ const SERVICE = (() => {
  * @param {import('../../application/vaultService.js').VaultService} deps.vaultService
  * @param {import('../../application/catalogService.js').CatalogService} deps.catalogService
  * @param {import('../../application/grillStreamService.js').GrillStreamService} deps.grillStream
+ * @param {import('../../application/publishService.js').PublishService} deps.publishService
+ * @param {import('../../application/billingService.js').BillingService} deps.billingService
+ * @param {import('../../application/entitlementService.js').EntitlementService} deps.entitlementService
+ * @param {import('../../application/telemetryService.js').TelemetryService} deps.telemetryService
  * @param {import('./auth.js').createAuth} deps.requireOrg
  * @param {import('./auth.js').createAuth} deps.requireRole
  * @param {() => Promise<{ok: boolean, latencyMs?: number, error?: string}>} deps.checkHealth
  *   Live storage readiness probe (see app.js).
  */
-export function createRouter({ service, vaultService, catalogService, grillStream, requireOrg, requireRole, checkHealth }) {
+export function createRouter({ service, vaultService, catalogService, grillStream, publishService, billingService, entitlementService, telemetryService, requireOrg, requireRole, checkHealth }) {
   const router = Router();
 
   const wrap = (fn) => (req, res) => {
@@ -66,6 +71,20 @@ export function createRouter({ service, vaultService, catalogService, grillStrea
         res.status(500).json({ error: 'INTERNAL', message: 'Unexpected server error.' });
       }
     }
+  };
+
+  // Async twin of `wrap` for the async service calls (publish, billing, github).
+  const wrapAsync = (fn) => (req, res) => {
+    fn(req)
+      .then((body) => res.status(body?.__status ?? 200).json(strip(body)))
+      .catch((err) => {
+        if (err instanceof AppError) {
+          res.status(err.status).json({ error: err.code, message: err.message, details: err.details });
+        } else {
+          console.error(err);
+          res.status(500).json({ error: 'INTERNAL', message: 'Unexpected server error.' });
+        }
+      });
   };
 
   // Liveness/readiness probe — deliberately public (no org binding): the
@@ -223,10 +242,17 @@ export function createRouter({ service, vaultService, catalogService, grillStrea
         if (grillStream.activeCount(req.orgId) >= STREAM_LIMITS.maxActiveSessionsPerOrg) {
           throw new AppError('TOO_MANY_SESSIONS', 'Too many active grill sessions for this workspace.', 429);
         }
+        // Increment 4 quota gate: free tier is capped at 10 Grill sessions /
+        // month; Team/trial is unlimited. Throws 402 QUOTA_EXCEEDED before
+        // any SSE headers are committed.
+        entitlementService.assertGrillQuota(req.orgId);
+        telemetryService.capture(req.orgId, 'grill_session_started', {
+          tier: entitlementService.resolveTier(req.orgId),
+        });
       }
     } catch (err) {
       if (err instanceof AppError) {
-        return res.status(err.status).json({ error: err.code, message: err.message });
+        return res.status(err.status).json({ error: err.code, message: err.message, details: err.details });
       }
       console.error(err);
       return res.status(500).json({ error: 'INTERNAL', message: 'Unexpected server error.' });
@@ -288,9 +314,12 @@ export function createRouter({ service, vaultService, catalogService, grillStrea
   // Static DAG validation + mock-handler topological simulation. This is the
   // ONLY "execution" surface, and it is provably inert: the simulation
   // module accepts no handlers and performs zero I/O (see safety.test.js).
+  // Increment 4: the response carries the entitlement preview mode — Free
+  // tier sees `mock` (mocked preview), Team/trial sees `simulated`.
   router.post('/workflow/simulate', requireOrg, requireRole('viewer'), async (req, res) => {
     try {
       const result = await simulateWorkflow(req.body?.workflow);
+      result.preview = entitlementService.previewMode(req.orgId);
       res.status(200).json(result);
     } catch (err) {
       console.error(err);
@@ -298,7 +327,158 @@ export function createRouter({ service, vaultService, catalogService, grillStrea
     }
   });
 
+  // --- Static Pre-Flight AST validation (Increment 4) ----------------------
+  // The full static gate run before ANY publish: structural DAG checks,
+  // schema parameter matching, tool-boundary constraints against the
+  // marketplace catalog, and the security boundary reassertion. Pure static
+  // analysis — nothing is executed (see preflight.js + safety.test.js).
+  router.post('/workflow/preflight', requireOrg, requireRole('viewer'), wrap((req) =>
+    preflightWorkflow(req.body?.workflow ?? null, catalogService.preflightContext()),
+  ));
+
+  // --- GitHub publishing + repository scraper (Increment 4) ----------------
+  // The OAuth dance: GET /github/auth-url (secured) hands the client a
+  // GitHub authorize URL; GitHub redirects to GET /github/callback (PUBLIC —
+  // GitHub carries no session token; the single-use state nonce binds the
+  // callback to the org that started it), which exchanges the code, stores
+  // the sealed token, and postMessages the result back to the opener popup.
+  // 401/403 from GitHub map to GITHUB_AUTH_REQUIRED so the UI can prompt an
+  // inline re-authentication without discarding the pending publish.
+
+  router.get('/github/auth-url', requireOrg, requireRole('architect'), wrap((req) => {
+    const { url } = publishService.authUrl({ orgId: req.orgId, userId: req.auth?.userId, redirectUri: req.query.redirect_uri });
+    return { url };
+  }));
+
+  router.get('/github/callback', async (req, res) => {
+    try {
+      const result = await publishService.completeOAuth({
+        code: String(req.query.code ?? ''),
+        state: String(req.query.state ?? ''),
+        redirectUri: req.query.redirect_uri,
+      });
+      res.type('html').send(oauthCallbackHtml({ ok: true, login: result.login }));
+    } catch (err) {
+      const code = err instanceof AppError ? err.code : 'OAUTH_FAILED';
+      const message = err instanceof AppError ? err.message : String(err);
+      res.status(err instanceof AppError ? err.status : 500).type('html').send(oauthCallbackHtml({ ok: false, error: code, message }));
+    }
+  });
+
+  router.get('/github/status', requireOrg, requireRole('viewer'), wrap((req) => publishService.status(req.orgId)));
+
+  router.get('/github/repos', requireOrg, requireRole('architect'), wrapAsync((req) => publishService.listRepos(req.orgId)));
+
+  router.get('/github/repos/:owner/:repo/contents', requireOrg, requireRole('viewer'), wrapAsync((req) =>
+    publishService.getContents(req.orgId, { owner: req.params.owner, repo: req.params.repo, path: String(req.query.path ?? '') }),
+  ));
+
+  router.delete('/github/connection', requireOrg, requireRole('owner'), wrap((req) => publishService.disconnect(req.orgId)));
+
+  // Publish: pre-flight → codegen → scaffold → create repo → push. The
+  // <5s SLA is enforced by the git-data push path (4 requests) and recorded
+  // on every publication for ops monitoring.
+  // Increment 4: the Team/trial entitlement gate runs FIRST — Free tier gets
+  // HTTP 402 PAYMENT_REQUIRED and the export is never attempted.
+  router.post('/projects/:id/publish', requireOrg, requireRole('architect'), wrapAsync(async (req) => {
+    const entitlement = entitlementService.assertExportAllowed(req.orgId);
+    try {
+      const result = await publishService.publish(req.orgId, req.params.id, {
+        repoName: req.body?.repoName,
+        description: req.body?.description,
+        private: req.body?.private !== false,
+        branch: req.body?.branch,
+      });
+      telemetryService.capture(req.orgId, 'export_completed', {
+        mode: 'live',
+        tier: entitlement.tier,
+        count: result.fileCount,
+        durationMs: result.latencyMs,
+        repoPrivate: req.body?.private !== false,
+        branch: result.branch,
+        outcome: 'ok',
+      });
+      return result;
+    } catch (err) {
+      if (err instanceof AppError) {
+        telemetryService.capture(req.orgId, 'export_blocked', {
+          tier: entitlement.tier,
+          reason: err.code,
+          outcome: 'blocked',
+        });
+      }
+      throw err;
+    }
+  }));
+
+  router.get('/projects/:id/publications', requireOrg, requireRole('viewer'), wrap((req) =>
+    publishService.listPublications(req.orgId, req.params.id),
+  ));
+
+  // --- Stripe billing (Increment 4) ----------------------------------------
+  // POST /api/billing/webhook is mounted on the APP (not here) so it can
+  // parse the RAW body before express.json — see app.js.
+  router.get('/billing', requireOrg, requireRole('viewer'), wrap((req) => billingService.getBilling(req.orgId)));
+
+  // Effective entitlement + usage for the current billing period — the data
+  // behind the plan badge and the quota gates (Free: 10 Grill/month, mock
+  // previews, no export; Team/trial: unlimited).
+  router.get('/billing/entitlement', requireOrg, requireRole('viewer'), wrap((req) =>
+    entitlementService.entitlement(req.orgId),
+  ));
+
+  router.post('/billing/checkout', requireOrg, requireRole('architect'), wrapAsync(async (req) => {
+    const result = await billingService.createCheckoutSession(req.orgId, {
+      successUrl: req.body?.successUrl,
+      cancelUrl: req.body?.cancelUrl,
+      tierId: req.body?.tierId,
+    });
+    telemetryService.capture(req.orgId, 'checkout_started', {
+      tier: req.body?.tierId ?? 'team',
+      mode: billingService.isConfigured() ? 'live' : 'mock',
+      outcome: 'ok',
+    });
+    return result;
+  }));
+
+  router.post('/billing/portal', requireOrg, requireRole('architect'), wrapAsync((req) =>
+    billingService.createPortalLink(req.orgId, { returnUrl: req.body?.returnUrl }),
+  ));
+
+  // --- Privacy-preserving analytics (Increment 4) --------------------------
+  // Client-side capture endpoint (lens selections, agent drops). The server
+  // allowlists every property and pseudonymizes the org — prompt text, API
+  // keys, or any free-form content is structurally impossible to log here
+  // (see telemetryService.js).
+  router.post('/telemetry/events', requireOrg, requireRole('viewer'), wrap((req) => {
+    const { event, props } = req.body ?? {};
+    if (typeof event !== 'string' || !event.trim()) {
+      throw new AppError('INVALID_EVENT', 'event must be a non-empty string.', 400);
+    }
+    telemetryService.capture(req.orgId, event, { ...(props ?? {}), tier: entitlementService.resolveTier(req.orgId) });
+    return { captured: true, event };
+  }));
+
   return router;
+}
+
+/** The popup-closing postMessage page the OAuth callback renders. */
+function oauthCallbackHtml({ ok, login = null, error = null, message = null }) {
+  const payload = JSON.stringify({ source: 'workflow-builders-github', ok, login, error, message });
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>GitHub connection</title></head>
+<body>
+<script>
+  (function () {
+    var payload = ${payload};
+    try {
+      if (window.opener) window.opener.postMessage(payload, '*');
+    } catch (e) { /* opener closed — nothing we can do */ }
+    window.close();
+  })();
+</script>
+<p>You can close this window.</p>
+</body></html>`;
 }
 
 const withStatus = (body, status) => ({ ...body, __status: status });

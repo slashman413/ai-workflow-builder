@@ -345,6 +345,178 @@ export function createSqliteRepos(filename = ':memory:', { log } = {}) {
     hasCatalog(source) {
       return Boolean(getLatestGoodVersion(source));
     },
+
+    /** Global tool allow-list from the latest good agency-agents payload. */
+    listTools() {
+      const good = getLatestGoodVersion('agency-agents');
+      if (!good?.payload) return [];
+      try {
+        const payload = JSON.parse(good.payload);
+        return (payload.tools ?? [])
+          .map((t) => (typeof t === 'string' ? { id: t } : { id: t?.id, label: t?.label, short: t?.short, icon: t?.icon }))
+          .filter((t) => t.id)
+          .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      } catch {
+        return [];
+      }
+    },
+  };
+
+  // ---------------------------------------------------------------------------
+  // Billing (Increment 4) — one row per org (tenant-scoped), plus the
+  // webhook idempotency ledger. `recordEvent` inserts the event id as PRIMARY
+  // KEY: the second delivery of the same event fails the insert (returns
+  // false) so its side effects never run twice.
+  // ---------------------------------------------------------------------------
+  const billingRepo = {
+    getByOrg(orgId) {
+      const row = db.prepare('SELECT * FROM billing WHERE org_id = ?').get(orgId);
+      return row ? rowToBilling(row) : null;
+    },
+    upsert(orgId, record) {
+      const now = new Date().toISOString();
+      db.prepare(
+        `INSERT INTO billing (org_id, stripe_customer_id, stripe_subscription_id, plan, status, current_period_end, trial_end, cancel_at_period_end, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(org_id) DO UPDATE SET
+           stripe_customer_id = COALESCE(excluded.stripe_customer_id, billing.stripe_customer_id),
+           stripe_subscription_id = COALESCE(excluded.stripe_subscription_id, billing.stripe_subscription_id),
+           plan = excluded.plan,
+           status = excluded.status,
+           current_period_end = COALESCE(excluded.current_period_end, billing.current_period_end),
+           trial_end = COALESCE(excluded.trial_end, billing.trial_end),
+           cancel_at_period_end = excluded.cancel_at_period_end,
+           updated_at = excluded.updated_at`,
+      ).run(
+        orgId,
+        record.stripeCustomerId ?? null,
+        record.stripeSubscriptionId ?? null,
+        record.plan ?? 'free',
+        record.status ?? 'none',
+        record.currentPeriodEnd ?? null,
+        record.trialEnd ?? null,
+        record.cancelAtPeriodEnd ? 1 : 0,
+        now,
+        now,
+      );
+      return this.getByOrg(orgId);
+    },
+    listEvents(orgId) {
+      return db
+        .prepare('SELECT * FROM billing_events WHERE org_id = ? ORDER BY received_at ASC')
+        .all(orgId)
+        .map(rowToBillingEvent);
+    },
+    /** @returns {boolean} true when the event was NEW (side effects should run). */
+    recordEvent({ eventId, eventType, orgId = null }) {
+      try {
+        db.prepare('INSERT INTO billing_events (event_id, event_type, org_id, received_at) VALUES (?, ?, ?, ?)').run(
+          eventId,
+          eventType,
+          orgId,
+          new Date().toISOString(),
+        );
+        return true;
+      } catch {
+        return false; // PRIMARY KEY collision — the event was already processed
+      }
+    },
+  };
+
+  // ---------------------------------------------------------------------------
+  // GitHub publishing (Increment 4) — OAuth connections (token sealed with
+  // the vault's envelope key) and the publication ledger.
+  // ---------------------------------------------------------------------------
+  const githubConnectionsRepo = {
+    get(orgId) {
+      const row = db.prepare('SELECT * FROM github_connections WHERE org_id = ?').get(orgId);
+      return row ? rowToGithubConnection(row) : null;
+    },
+    upsert(orgId, { login, tokenSealed, scopes }) {
+      const now = new Date().toISOString();
+      db.prepare(
+        `INSERT INTO github_connections (org_id, login, token_sealed, scopes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(org_id) DO UPDATE SET
+           login = excluded.login,
+           token_sealed = excluded.token_sealed,
+           scopes = excluded.scopes,
+           updated_at = excluded.updated_at`,
+      ).run(orgId, login, tokenSealed, JSON.stringify(scopes ?? []), now, now);
+      return this.get(orgId);
+    },
+    remove(orgId) {
+      const info = db.prepare('DELETE FROM github_connections WHERE org_id = ?').run(orgId);
+      return info.changes > 0;
+    },
+  };
+
+  const publicationsRepo = {
+    record(record) {
+      const now = new Date().toISOString();
+      const id = record.id ?? randomUUID();
+      db.prepare(
+        `INSERT INTO publications (id, org_id, project_id, repo_owner, repo_name, repo_url, private, file_count, latency_ms, workflow_hash, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        record.orgId,
+        record.projectId,
+        record.repoOwner,
+        record.repoName,
+        record.repoUrl,
+        record.private ? 1 : 0,
+        record.fileCount,
+        record.latencyMs,
+        record.workflowHash,
+        record.createdAt ?? now,
+      );
+      return this.listByOrg(record.orgId)[0] ?? null;
+    },
+    listByOrg(orgId) {
+      return db
+        .prepare('SELECT * FROM publications WHERE org_id = ? ORDER BY created_at DESC')
+        .all(orgId)
+        .map(rowToPublication);
+    },
+    listByProject(orgId, projectId) {
+      return db
+        .prepare('SELECT * FROM publications WHERE org_id = ? AND project_id = ? ORDER BY created_at DESC')
+        .all(orgId, projectId)
+        .map(rowToPublication);
+    },
+  };
+
+  // ---------------------------------------------------------------------------
+  // Increment 4 (continuation): monthly usage quotas + local privacy-safe
+  // telemetry log (migration 0008). Billing + webhook idempotency live in
+  // `billingRepo`; GitHub connections + publications in their own repos.
+  // ---------------------------------------------------------------------------
+  const usageRepo = {
+    /** Increment a monthly counter (upsert) and return the new total. */
+    increment(orgId, metric, period, amount = 1) {
+      db.prepare(
+        `INSERT INTO usage_events (id, org_id, metric, period, amount, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(org_id, metric, period) DO UPDATE SET amount = amount + excluded.amount`,
+      ).run(randomUUID(), orgId, metric, period, amount, new Date().toISOString());
+      return this.count(orgId, metric, period);
+    },
+    count(orgId, metric, period) {
+      const row = db
+        .prepare('SELECT amount FROM usage_events WHERE org_id = ? AND metric = ? AND period = ?')
+        .get(orgId, metric, period);
+      return row ? row.amount : 0;
+    },
+  };
+
+  const telemetryRepo = {
+    insert({ orgHash, event, props = {} }) {
+      db.prepare(
+        'INSERT INTO telemetry_events (id, org_hash, event, props, created_at) VALUES (?, ?, ?, ?, ?)',
+      ).run(randomUUID(), orgHash, event, JSON.stringify(props), new Date().toISOString());
+      return true;
+    },
   };
 
   return {
@@ -354,6 +526,11 @@ export function createSqliteRepos(filename = ':memory:', { log } = {}) {
     grillSessions: grillSessionsRepo,
     vaultKeys: vaultKeysRepo,
     catalog: catalogRepo,
+    billing: billingRepo,
+    githubConnections: githubConnectionsRepo,
+    publications: publicationsRepo,
+    usage: usageRepo,
+    telemetry: telemetryRepo,
     /**
      * Readiness probe for GET /api/health — one cheap round-trip. Never
      * throws: a broken database reports `{ ok: false, error }` so the health
@@ -480,6 +657,57 @@ function rowToLens(row, versionRow) {
     description: row.description,
     fidelity: row.fidelity,
     body: row.body,
+    createdAt: row.created_at,
+  };
+}
+
+function rowToBilling(row) {
+  return {
+    orgId: row.org_id,
+    stripeCustomerId: row.stripe_customer_id,
+    stripeSubscriptionId: row.stripe_subscription_id,
+    plan: row.plan,
+    status: row.status,
+    currentPeriodEnd: row.current_period_end,
+    trialEnd: row.trial_end,
+    cancelAtPeriodEnd: row.cancel_at_period_end === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToBillingEvent(row) {
+  return {
+    eventId: row.event_id,
+    eventType: row.event_type,
+    orgId: row.org_id,
+    receivedAt: row.received_at,
+  };
+}
+
+function rowToGithubConnection(row) {
+  return {
+    orgId: row.org_id,
+    login: row.login,
+    tokenSealed: row.token_sealed,
+    scopes: JSON.parse(row.scopes || '[]'),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToPublication(row) {
+  return {
+    id: row.id,
+    orgId: row.org_id,
+    projectId: row.project_id,
+    repoOwner: row.repo_owner,
+    repoName: row.repo_name,
+    repoUrl: row.repo_url,
+    private: row.private === 1,
+    fileCount: row.file_count,
+    latencyMs: row.latency_ms,
+    workflowHash: row.workflow_hash,
     createdAt: row.created_at,
   };
 }

@@ -75,6 +75,13 @@ no CORS to configure locally.
 | `CORS_ORIGINS` | — | Comma-separated origin allow-list override (defaults: production → `https://workflow-builders.com`; dev → localhost Vite origins). `https://*.pages.dev` preview deploys and `https://*.workflow-builders.com` subdomains are always honored |
 | `AUTH_MODE` | `test` | `clerk` verifies every request's session JWT with Clerk (`CLERK_SECRET_KEY` required) |
 | `VAULT_KEK` | — | 32-byte base64 envelope key for the LLM key vault (required in production) |
+| `STRIPE_SECRET_KEY` | — | Enables live Stripe billing (Team tier, $99/mo) |
+| `STRIPE_WEBHOOK_SECRET` | — | `whsec_…` for signature-verified webhooks (required for billing) |
+| `STRIPE_TEAM_PRICE_ID` | — | Stripe Price id for the Team tier |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | — | GitHub OAuth app for repo publishing (repo scope) |
+| `GITHUB_REDIRECT_URI` | — | OAuth callback URL (defaults to `${API_ORIGIN}/api/github/callback`) |
+| `POSTHOG_API_KEY` | — | Enables PostHog product analytics (privacy-preserving, allowlisted props only) |
+| `POSTHOG_HOST` | `https://us.i.posthog.com` | PostHog ingestion host |
 
 ## The REST API
 
@@ -94,8 +101,50 @@ All endpoints are served under `/api`. The machine-readable contract lives in
 | `POST` | `/api/projects/{id}/workflow/scaffold` | Scaffold a workflow DAG from the spec |
 | `GET` | `/api/projects/{id}/workflow` | Fetch the current workflow |
 | `PUT` | `/api/projects/{id}/workflow` | Save/replace the workflow (validated) |
+| `POST` | `/api/workflow/preflight` | Static pre-flight AST validation (cycles, reachability, schema, tool boundaries, security) |
+| `POST` | `/api/workflow/simulate` | SAFE execution preview (static validation + mock simulation) |
+| `POST` | `/api/projects/{id}/publish` | Export the compiled workflow to GitHub (Team tier) |
+| `GET` | `/api/projects/{id}/publications` | Publication ledger for a project |
+| `GET` | `/api/github/auth-url` | Start the GitHub OAuth dance (repo scope) |
+| `GET` | `/api/github/status` | GitHub connection status + recent publications |
+| `DELETE` | `/api/github/connection` | Disconnect the org's GitHub account |
+| `GET` | `/api/billing` | Current Stripe subscription state |
+| `GET` | `/api/billing/entitlement` | Effective tier + monthly Grill usage (free cap / team gates) |
+| `POST` | `/api/billing/checkout` | Create a Stripe Checkout session (Team $99/mo) |
+| `POST` | `/api/billing/portal` | Stripe billing portal link |
+| `POST` | `/api/billing/webhook` | Stripe webhook (public, signature-verified, idempotent) |
+| `POST` | `/api/telemetry/events` | Privacy-preserving analytics capture (allowlisted props only) |
 
 See [`docs/api-reference.md`](docs/api-reference.md) for request/response shapes and error codes.
+
+## Monetization, publishing & analytics (Increment 4)
+
+- **Pre-flight validator** — `POST /api/workflow/preflight` runs the full static gate before any
+  export: structural DAG checks, reachability (islands, unreachable nodes), schema parameter
+  matching, tool-boundary constraints against the marketplace allow-list, and the security
+  boundary reassertion (executable payload markers are refused; nothing ever executes).
+- **Code generator** — the compiled Python project now ships typed interfaces (`interfaces.py`),
+  LLM retry + fallback handlers (`LLM_MAX_RETRIES`, `DEFAULT_AGENT_FALLBACK`,
+  `main(continue_on_error=True)`), GitHub Actions CI (`.github/workflows/ci.yml`), `.gitignore`
+  and a spec scaffold (`spec.yaml`, `workflow.json`).
+- **GitHub publishing** — OAuth (repo scope) connects the user's account; the git-data API
+  scaffolds a repository in 4 requests (<5s SLA). Tokens are sealed with the vault's envelope
+  key; every publish is recorded in the `publications` ledger.
+- **Stripe billing** — Team tier at $99/mo with a 14-day trial. Webhooks are signature-verified,
+  idempotent (event-id ledger) and out-of-order safe (state is re-fetched, never trusted from
+  the event). Entitlement gates: Free = 10 Grill sessions/month + mocked previews; Team/trial =
+  unlimited Grill loops + repository export.
+- **PostHog analytics** — the user funnel (grill kickoff, lens selections, export completions)
+  is captured with pseudonymous org hashes and an allowlisted property set. Prompt text, API
+  keys and free-form content are structurally impossible to log.
+
+### Pre-GA security gates
+
+```bash
+node scripts/security/secret-scan.mjs      # HIGH/MEDIUM/LOW secret patterns across the tree
+node scripts/security/coverage-gate.mjs    # line coverage ≥ 90% (96% today)
+bash scripts/security/security-gate.sh     # lint + test + build + secret scan + coverage
+```
 
 ## How it works
 

@@ -209,7 +209,8 @@ test('compileWorkflow produces a valid Python project from a covered spec', () =
   });
   assert.equal(spec.ready, true);
   assert.ok(workflow.nodes.length >= 3);
-  assert.ok(generated.files['main.py'].includes('def main()'));
+  assert.ok(generated.files['main.py'].includes('def main'));
+  assert.ok(generated.files['main.py'].includes('continue_on_error'));
 });
 
 // --- live HTTP SSE -----------------------------------------------------------

@@ -4,6 +4,14 @@
  * Returns a structured list of errors instead of throwing, so callers (HTTP
  * adapter, UI) can surface every problem at once. A workflow is only persisted
  * or "runnable" when this returns zero errors.
+ *
+ * This is the STRUCTURAL validator: unique ids, resolvable dependencies, an
+ * acyclic graph. Increment 4 adds `preflightWorkflow` (see preflight.js) —
+ * the enhanced static AST validator layered on top of this one, run before
+ * any project is published. It adds schema parameter matching and tool-boundary
+ * checks (persona permissions from tools.json) plus the security boundary
+ * reassertion. Publishing paths MUST call preflightWorkflow, never this
+ * function alone.
  */
 
 import { NODE_TYPES } from './workflow.js';

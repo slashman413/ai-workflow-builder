@@ -735,6 +735,423 @@ paths:
                           additionalProperties: true
                   note: { type: string }
 
+  /api/workflow/preflight:
+    post:
+      tags: [workflow]
+      summary: Static pre-flight AST validation (publish gate)
+      description: |
+        Runs the full static gate over a workflow: structural DAG checks
+        (cycles, dangling refs, duplicate ids), reachability analysis
+        (islands, unreachable nodes, dead ends), schema parameter matching
+        per node type, tool-boundary constraints against the marketplace
+        allow-list, and the security boundary reassertion. Pure static
+        analysis — nothing is executed.
+      operationId: preflightWorkflow
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workflow: { $ref: '#/components/schemas/Workflow' }
+              required: [workflow]
+      responses:
+        '200':
+          description: Pre-flight report.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  summary: { type: string }
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: { type: string }
+                        message: { type: string }
+                        nodeId: { type: string }
+                  warnings:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: { type: string }
+                        message: { type: string }
+                        nodeId: { type: string }
+                  checks:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        passed: { type: boolean }
+                        count: { type: integer }
+                  security:
+                    type: object
+                    properties:
+                      executedCode: { type: boolean, const: false }
+                      boundary: { type: string }
+                      blocked: { type: array, items: { type: string } }
+
+  # --- GitHub publishing (Increment 4) -------------------------------------
+  /api/github/auth-url:
+    get:
+      tags: [publish]
+      summary: Start the GitHub OAuth dance (repo scope)
+      description: |
+        Creates a single-use state nonce bound to the caller's org and
+        returns the GitHub authorize URL. The client opens it in a popup;
+        GitHub redirects to /api/github/callback.
+      operationId: githubAuthUrl
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: redirect_uri
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: GitHub authorize URL.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string }
+        '503':
+          description: GitHub OAuth not configured (GITHUB_CLIENT_ID missing).
+  /api/github/callback:
+    get:
+      tags: [publish]
+      summary: GitHub OAuth callback (public)
+      description: |
+        Public endpoint (GitHub carries no session token). Consumes the
+        single-use state nonce, exchanges the code for a token, stores the
+        sealed token against the org, and renders an HTML page that
+        postMessages the outcome to the opener popup and closes.
+      operationId: githubOAuthCallback
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: HTML popup-closing page.
+  /api/github/status:
+    get:
+      tags: [publish]
+      summary: GitHub connection status + recent publications
+      operationId: githubStatus
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Connection status (never exposes the token).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connected: { type: boolean }
+                  login: { type: string, nullable: true }
+                  scopes: { type: array, items: { type: string } }
+                  connectedAt: { type: string, nullable: true }
+                  publications:
+                    type: array
+                    items: { $ref: '#/components/schemas/Publication' }
+  /api/github/repos:
+    get:
+      tags: [publish]
+      summary: List the connected account's repositories (repo scope)
+      operationId: githubListRepos
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Repository listing.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name: { type: string }
+                    full_name: { type: string }
+                    html_url: { type: string }
+                    private: { type: boolean }
+                    default_branch: { type: string }
+  /api/github/repos/{owner}/{repo}/contents:
+    get:
+      tags: [publish]
+      summary: Read a path inside a repository (contents API)
+      operationId: githubGetContents
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: owner
+          in: path
+          required: true
+          schema: { type: string }
+        - name: repo
+          in: path
+          required: true
+          schema: { type: string }
+        - name: path
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: File or directory listing from the GitHub contents API.
+  /api/github/connection:
+    delete:
+      tags: [publish]
+      summary: Disconnect the org's GitHub account
+      operationId: githubDisconnect
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Connection removed.
+        '404':
+          description: No connection to remove.
+  /api/projects/{id}/publish:
+    post:
+      tags: [publish]
+      summary: Publish a project's workflow to GitHub (Team tier)
+      description: |
+        Pre-flight validates the workflow, the hexagonal codegen compiles
+        the Python project, spec.yaml + workflow.json are scaffolded, a
+        repository is created in the user's account, and the file tree is
+        pushed via the git data API. Requires an active Team subscription or
+        trial (Free tier answers 402 PAYMENT_REQUIRED).
+      operationId: publishProject
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                repoName: { type: string, description: '1-100 chars: letters, digits, . _ - (cannot start with a dot)' }
+                description: { type: string }
+                private: { type: boolean, default: true }
+                branch: { type: string, default: main }
+              required: [repoName]
+      responses:
+        '200':
+          description: Publish result with the repository URL and ledger row.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repoUrl: { type: string }
+                  sha: { type: string }
+                  branch: { type: string }
+                  latencyMs: { type: integer }
+                  fileCount: { type: integer }
+                  summary: { type: string }
+                  publication: { $ref: '#/components/schemas/Publication' }
+        '402':
+          description: Team subscription or trial required.
+        '422':
+          description: Pre-flight validation failed or invalid repo name.
+  /api/projects/{id}/publications:
+    get:
+      tags: [publish]
+      summary: Publication ledger for a project
+      operationId: listPublications
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Publication rows (newest first).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Publication' }
+
+  # --- Stripe billing (Increment 4) ----------------------------------------
+  /api/billing/webhook:
+    post:
+      tags: [billing]
+      summary: Stripe webhook (public, signature-verified)
+      description: |
+        Receives Stripe events on the RAW body. The signature is verified
+        against the `stripe-signature` header; event ids are deduplicated in
+        the billing_events ledger; subscription state is re-fetched from
+        Stripe so out-of-order delivery cannot regress the row.
+      operationId: stripeWebhook
+      responses:
+        '200':
+          description: Event acknowledged (processed or duplicate).
+        '400':
+          description: Signature verification failed.
+  /api/billing:
+    get:
+      tags: [billing]
+      summary: Current subscription state for the org
+      operationId: getBilling
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Billing row (never exposes Stripe internals).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orgId: { type: string }
+                  configured: { type: boolean }
+                  plan: { type: string }
+                  status: { type: string }
+                  statusLabel: { type: string }
+                  trialEnd: { type: string, nullable: true }
+                  currentPeriodEnd: { type: string, nullable: true }
+                  cancelAtPeriodEnd: { type: boolean }
+  /api/billing/entitlement:
+    get:
+      tags: [billing]
+      summary: Effective tier + usage quota for the current period
+      description: |
+        Resolves the org's effective tier (free | trial | team) from the
+        subscription state and reports the monthly Grill usage. Drives the
+        plan badge and the quota gates.
+      operationId: getEntitlement
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Entitlement snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orgId: { type: string }
+                  tier: { type: string, enum: [free, trial, team] }
+                  label: { type: string }
+                  limits:
+                    type: object
+                    properties:
+                      grillSessionsPerMonth: { type: integer, nullable: true }
+                      exports: { type: boolean }
+                      unlimitedGrill: { type: boolean }
+                      preview: { type: string, enum: [mock, simulated] }
+                  usage:
+                    type: object
+                    properties:
+                      grillSessionsThisMonth: { type: integer }
+                  billing:
+                    type: object
+                    properties:
+                      plan: { type: string }
+                      status: { type: string }
+                      trialEnd: { type: string, nullable: true }
+                      currentPeriodEnd: { type: string, nullable: true }
+  /api/billing/checkout:
+    post:
+      tags: [billing]
+      summary: Create a Stripe Checkout session for the Team tier
+      operationId: createCheckoutSession
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                successUrl: { type: string }
+                cancelUrl: { type: string }
+                tierId: { type: string, default: team }
+              required: [successUrl, cancelUrl]
+      responses:
+        '200':
+          description: Checkout session URL.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string, nullable: true }
+                  sessionId: { type: string }
+        '503':
+          description: Stripe not configured.
+  /api/billing/portal:
+    post:
+      tags: [billing]
+      summary: Stripe billing portal link for the org's customer
+      operationId: createPortalLink
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                returnUrl: { type: string }
+      responses:
+        '200':
+          description: Portal URL.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string }
+        '409':
+          description: No Stripe customer yet.
+
+  # --- Telemetry (Increment 4) ----------------------------------------------
+  /api/telemetry/events:
+    post:
+      tags: [telemetry]
+      summary: Capture one analytics event (privacy-preserving)
+      description: |
+        Client-side capture (lens selections, agent drops). The server
+        allowlists every property (prompt text, API keys and free-form
+        content are structurally dropped) and pseudonymizes the org id.
+      operationId: captureTelemetryEvent
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event: { type: string }
+                props:
+                  type: object
+                  additionalProperties: true
+              required: [event]
+      responses:
+        '200':
+          description: Event captured.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  captured: { type: boolean, const: true }
+                  event: { type: string }
+        '400':
+          description: Missing event name.
+
 components:
   securitySchemes:
     bearerAuth:

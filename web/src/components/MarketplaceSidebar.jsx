@@ -91,6 +91,11 @@ export function MarketplaceSidebar({ canEdit, activeLensId, onSelectLens, onAddP
       }),
     );
     e.dataTransfer.effectAllowed = 'copy';
+    // Privacy-safe funnel analytics (server allowlists props — no persona
+    // text or ids ever leave the allowed set).
+    api.telemetry
+      .capture('agent_selected', { division: persona.division ?? 'unknown', source: 'agency-agents' })
+      .catch(() => {});
   };
 
   const updateBadge = updates.find((u) => u.source === 'agency-agents');

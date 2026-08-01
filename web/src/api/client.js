@@ -62,13 +62,55 @@ export const api = {
    * only. No user code ever executes on the server (see safety.test.js).
    */
   simulate: (workflow) => request('/workflow/simulate', { method: 'POST', body: JSON.stringify({ workflow }) }),
+  /**
+   * Static pre-flight AST validation (Increment 4) — cycles, reachability,
+   * schema matching, tool boundaries, security boundary.
+   */
+  preflight: (workflow) => request('/workflow/preflight', { method: 'POST', body: JSON.stringify({ workflow }) }),
   vault: {
     list: () => request('/vault'),
     store: (payload) => request('/vault', { method: 'POST', body: JSON.stringify(payload) }),
     remove: (id) => request(`/vault/${id}`, { method: 'DELETE' }),
   },
-  /**
-   * Ecosystem catalogs (Increment 3) — the Agent Marketplace + Cognitive
+  /** GitHub publishing (Increment 4) — OAuth connection + repo export. */
+  github: {
+    authUrl: (redirectUri) => {
+      const qs = redirectUri ? `?redirect_uri=${encodeURIComponent(redirectUri)}` : '';
+      return request(`/github/auth-url${qs}`);
+    },
+    status: () => request('/github/status'),
+    repos: () => request('/github/repos'),
+    contents: (owner, repo, path = '') =>
+      request(`/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents?path=${encodeURIComponent(path)}`),
+    disconnect: () => request('/github/connection', { method: 'DELETE' }),
+  },
+  publish: (projectId, { repoName, description, private: isPrivate, branch }) =>
+    request(`/projects/${projectId}/publish`, {
+      method: 'POST',
+      body: JSON.stringify({ repoName, description, private: isPrivate, branch }),
+    }),
+  publications: (projectId) => request(`/projects/${projectId}/publications`),
+  /** Stripe billing + entitlements (Increment 4). */
+  billing: {
+    status: () => request('/billing'),
+    entitlement: () => request('/billing/entitlement'),
+    checkout: (tierId = 'team') =>
+      request('/billing/checkout', {
+        method: 'POST',
+        body: JSON.stringify({
+          tierId,
+          successUrl: window.location.origin + '/?billing=success',
+          cancelUrl: window.location.origin + '/?billing=cancelled',
+        }),
+      }),
+    portal: () => request('/billing/portal', { method: 'POST', body: JSON.stringify({}) }),
+  },
+  /** Privacy-preserving analytics (Increment 4) — allowlisted server-side. */
+  telemetry: {
+    capture: (event, props = {}) =>
+      request('/telemetry/events', { method: 'POST', body: JSON.stringify({ event, props }) }),
+  },
+  /** Ecosystem catalogs (Increment 3) — the Agent Marketplace + Cognitive
    * Lens selector. All read-only, global MIT data; any authenticated org.
    */
   catalog: {

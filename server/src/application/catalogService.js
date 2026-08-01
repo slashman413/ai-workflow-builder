@@ -138,6 +138,21 @@ export class CatalogService {
   }
 
   /**
+   * The persona + tool context for pre-flight validation, derived from the
+   * synced marketplace. Never throws: when the catalog is not synced the
+   * context is empty and pre-flight still runs structural + schema checks
+   * (any tool call is then UNKNOWN — fail-closed on publish).
+   */
+  preflightContext() {
+    try {
+      const grouped = this.getPersonas();
+      return { personas: grouped.flatMap((d) => d.agents ?? []), tools: this.catalogRepo.listTools() };
+    } catch {
+      return { personas: [], tools: [] };
+    }
+  }
+
+  /**
    * Update check for the skills/marketplace: reports the CURRENTLY PINNED
    * version of each source so the UI can render catalog version badges and
    * surface staleness. The nightly sync CLI (server/src/cli/sync-catalogs.js)
