@@ -56,6 +56,9 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [ci, security]
     runs-on: ubuntu-latest
+    permissions:
+      deployments: write
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
