@@ -125,6 +125,14 @@ export function App() {
       <header>
         <h1>AI Workflow Builder</h1>
         <p className="tagline">Prompt → grill me → agent workflow.</p>
+        <a
+          className="gumroad-cta"
+          href="https://slashmaster6.gumroad.com/l/amwkf?utm_source=app&utm_medium=header&utm_campaign=aiwb"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Get the code — $99
+        </a>
       </header>
 
       <AuthBar />

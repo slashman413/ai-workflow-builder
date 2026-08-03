@@ -22,6 +22,20 @@ body {
 header h1 { margin: 0; font-size: 1.6rem; }
 .tagline { color: var(--muted); margin-top: 0.25rem; }
 
+.gumroad-cta {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 8px;
+  background: var(--accent, #7c5cff);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-decoration: none;
+  transition: opacity 0.15s ease;
+}
+.gumroad-cta:hover { opacity: 0.85; }
+
 .card {
   background: var(--card);
   border: 1px solid var(--line);
