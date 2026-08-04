@@ -1,29 +1,37 @@
 /**
- * safety.test.js — the hard security invariant of Increment 3.
+ * safety.test.js — the security invariant of the workflow runtime.
+ *
+ * Increment 3 established the hard rule:
  *
  *   NO user-authored workflow code ever executes on our backend servers.
  *
- * Execution preview is restricted strictly to:
- *   1. static DAG validation (validateWorkflow), and
- *   2. mock-handler topological simulations (simulation.js).
+ * That invariant still holds, and Increment 5 sharpens what "code" means:
  *
- * This file makes that invariant CHECKABLE in three ways:
+ *   1. Execution preview (POST /api/workflow/simulate) remains strictly
+ *      mock-handler simulation — static DAG validation + deterministic
+ *      placeholders, zero I/O (simulation.js is self-contained).
+ *   2. The production runtime (Increment 5, server/src/execution/) executes
+ *      workflows through a CLOSED set of built-in handlers (input / agent /
+ *      tool / branch / output). The handler table is fixed server-side; a
+ *      workflow can never inject a handler, and there is no dynamic-execution
+ *      primitive anywhere in the server source.
  *
- *   A. Structural: the HTTP-reachable module graph (app → routes → domain)
- *      never imports the real runtime (executor.js / handlers.js) — the only
- *      "execution" surface is the simulation module, which is self-contained.
- *      The simulation module itself performs zero I/O: no fetch, no fs, no
- *      child processes, no LLM calls.
+ * This file makes that invariant CHECKABLE in four ways:
  *
+ *   A. Structural: the runtime dispatches ONLY through the closed built-in
+ *      handler table (engine.js), and the simulation module never imports
+ *      the production runtime — the preview path stays provably inert.
  *   B. Source scan: server/src contains no dynamic-execution primitive that
  *      could run user code (no child_process, no node:vm, no eval/new
  *      Function outside generated-code STRINGS that are never executed).
- *
  *   C. Behavioral: POST /api/workflow/simulate answers only with mock
  *      outputs — a workflow whose input nodes point at URLs/files is
  *      simulated WITHOUT any network or filesystem side effect, proving the
  *      preview is inert even for payloads that would do real I/O under the
  *      production runtime.
+ *   D. Behavioral: the production runtime (engine) refuses to run a node
+ *      whose type has no built-in handler, and built-in handlers never
+ *      receive user code — node config is data, not programs.
  */
 
 import { test, before, after } from 'node:test';
@@ -102,43 +110,50 @@ function walkJs(dir, acc = []) {
   return acc;
 }
 
-test('the HTTP-reachable graph never imports the real workflow runtime (executor/handlers)', () => {
-  const banned = ['executor.js', 'handlers.js'];
-  const roots = [
-    join(SRC_DIR, 'adapters/http/app.js'),
-    join(SRC_DIR, 'adapters/http/routes.js'),
-    join(SRC_DIR, 'index.js'),
-  ];
-  const seen = new Set();
-  const queue = [...roots];
-  while (queue.length) {
-    const file = queue.shift();
-    if (seen.has(file)) continue;
-    seen.add(file);
-    const source = readFileSync(file, 'utf8');
-    for (const imp of localImports(source)) {
-      const resolved = join(dirname(file), imp);
-      const full = resolved.endsWith('.js') ? resolved : `${resolved}.js`;
-      for (const b of banned) {
-        assert.ok(
-          !full.endsWith(`/${b}`),
-          `${file} transitively imports the real runtime ${b} — user code could execute on the server`,
-        );
-      }
-      if (full.startsWith(SRC_DIR) && full.endsWith('.js')) queue.push(full);
-    }
-  }
-  // Sanity: the traversal actually reached the domain layer.
-  assert.ok([...seen].some((f) => f.includes('validateWorkflow.js')), 'traversal reached the workflow validator');
+test('the execution runtime is a CLOSED handler set — built-ins only, dispatch never leaves the table', () => {
+  const engineSource = readFileSync(join(SRC_DIR, 'execution/engine.js'), 'utf8');
+  // The default handler table is exactly the five built-in node types.
+  assert.match(engineSource, /input: inputHandler/, 'input handler wired');
+  assert.match(engineSource, /agent: agentHandler/, 'agent handler wired');
+  assert.match(engineSource, /tool: toolHandler/, 'tool handler wired');
+  assert.match(engineSource, /branch: branchHandler/, 'branch handler wired');
+  assert.match(engineSource, /output: outputHandler/, 'output handler wired');
+  // Every dispatch goes through this.handlers[node.type] — node.type comes
+  // from the workflow DAG, but the table itself is fixed server-side.
+  assert.match(engineSource, /this\.handlers\[node\.type\]/, 'dispatch only through the closed handler table');
 });
 
-test('simulation.js is self-contained: it never imports handlers.js/executor.js', () => {
+test('the runtime reaches the built-in handlers ONLY via the engine (no other entry point)', () => {
+  // Every handler module is imported by the engine as part of the closed
+  // table; no other module may pull a handler in as a generic execution hook.
+  const files = walkJs(SRC_DIR);
+  const handlerModules = new Set([
+    'handler/input.js',
+    'handler/agent.js',
+    'handler/tool.js',
+    'handler/branch.js',
+    'handler/output.js',
+  ]);
+  for (const file of files) {
+    const short = file.slice(file.indexOf('/src/') + 5);
+    const source = readFileSync(file, 'utf8');
+    for (const imp of localImports(source)) {
+      const resolved = imp.replace(/\.js$/, '') + '.js';
+      if (handlerModules.has(resolved) && !file.endsWith('execution/engine.js')) {
+        assert.fail(`${short} imports a built-in handler outside the engine — execution must be engine-only`);
+      }
+    }
+  }
+});
+
+test('simulation.js is self-contained: it never imports handlers.js/executor.js or the production runtime', () => {
   const source = readFileSync(join(SRC_DIR, 'domain/executor/simulation.js'), 'utf8');
   // Check IMPORT STATEMENTS only — doc comments may mention the real runtime
   // (this file explains why it does NOT use it).
   const importStatements = [...source.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]);
   assert.ok(!importStatements.some((s) => s.includes('handlers.js')), 'simulation must not import the real handlers');
   assert.ok(!importStatements.some((s) => s.includes('executor.js')), 'simulation must not import the real executor');
+  assert.ok(!importStatements.some((s) => s.includes('execution/engine')), 'simulation must not import the production runtime');
   // And it performs no I/O by construction: no fs, no fetch, no child_process.
   assert.ok(!importStatements.some((s) => s.includes('node:fs')), 'simulation performs no filesystem I/O');
   assert.ok(!source.includes('fetch('), 'simulation performs no network I/O');

@@ -519,6 +519,172 @@ export function createSqliteRepos(filename = ':memory:', { log } = {}) {
     },
   };
 
+  // ---------------------------------------------------------------------------
+  // Execution (Increment 5) — the run ledger (executions), per-step logs
+  // (execution_steps), and one-click deploys (deployments). All org-scoped:
+  // a foreign-org lookup is indistinguishable from a missing row, matching the
+  // tenancy contract of every other repository here.
+  // ---------------------------------------------------------------------------
+  const executionsRepo = {
+    create(record) {
+      const now = new Date().toISOString();
+      const id = record.id ?? `exec_${randomUUID()}`;
+      db.prepare(
+        `INSERT INTO executions (id, org_id, project_id, workflow_id, status, started_at, finished_at, duration_ms, error_message, retry_of, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        record.orgId,
+        record.projectId,
+        record.workflowId ?? '',
+        record.status ?? 'queued',
+        record.startedAt ?? null,
+        record.finishedAt ?? null,
+        record.durationMs ?? null,
+        record.errorMessage ?? null,
+        record.retryOf ?? null,
+        now,
+      );
+      return this.get(record.orgId, id);
+    },
+    get(orgId, id) {
+      const row = db.prepare('SELECT * FROM executions WHERE id = ? AND org_id = ?').get(id, orgId);
+      return row ? rowToExecution(row) : null;
+    },
+    listByProject(orgId, projectId) {
+      const rows = db
+        .prepare('SELECT * FROM executions WHERE org_id = ? AND project_id = ? ORDER BY created_at DESC')
+        .all(orgId, projectId);
+      return rows.map(rowToExecution);
+    },
+    latestForProject(orgId, projectId) {
+      const row = db
+        .prepare('SELECT * FROM executions WHERE org_id = ? AND project_id = ? ORDER BY created_at DESC LIMIT 1')
+        .get(orgId, projectId);
+      return row ? rowToExecution(row) : null;
+    },
+    update(orgId, id, patch) {
+      const existing = this.get(orgId, id);
+      if (!existing) return null;
+      const next = { ...existing, ...patch };
+      db.prepare(
+        `UPDATE executions SET status = ?, started_at = ?, finished_at = ?, duration_ms = ?, error_message = ? WHERE id = ? AND org_id = ?`,
+      ).run(
+        next.status ?? existing.status,
+        next.startedAt ?? existing.startedAt,
+        next.finishedAt ?? existing.finishedAt,
+        next.durationMs ?? existing.durationMs,
+        next.errorMessage ?? existing.errorMessage,
+        id,
+        orgId,
+      );
+      return this.get(orgId, id);
+    },
+  };
+
+  const executionStepsRepo = {
+    insert(record) {
+      const now = new Date().toISOString();
+      const id = record.id ?? randomUUID();
+      db.prepare(
+        `INSERT INTO execution_steps (id, execution_id, node_id, node_type, status, input_data, output_data, error_message, attempts, duration_ms, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        record.executionId,
+        record.nodeId,
+        record.nodeType,
+        record.status ?? 'queued',
+        record.inputData != null ? JSON.stringify(record.inputData) : null,
+        record.outputData != null ? JSON.stringify(record.outputData) : null,
+        record.errorMessage ?? null,
+        record.attempts ?? 1,
+        record.durationMs ?? null,
+        now,
+        now,
+      );
+      return this.get(record.orgId, id);
+    },
+    get(orgId, id) {
+      const row = db
+        .prepare('SELECT s.* FROM execution_steps s JOIN executions e ON e.id = s.execution_id WHERE s.id = ? AND e.org_id = ?')
+        .get(id, orgId);
+      return row ? rowToExecutionStep(row) : null;
+    },
+    listByExecution(orgId, executionId) {
+      const rows = db
+        .prepare('SELECT s.* FROM execution_steps s JOIN executions e ON e.id = s.execution_id WHERE s.execution_id = ? AND e.org_id = ? ORDER BY s.created_at ASC')
+        .all(executionId, orgId);
+      return rows.map(rowToExecutionStep);
+    },
+    update(orgId, id, patch) {
+      const existing = this.get(orgId, id);
+      if (!existing) return null;
+      const next = { ...existing, ...patch };
+      db.prepare(
+        `UPDATE execution_steps SET status = ?, input_data = ?, output_data = ?, error_message = ?, attempts = ?, duration_ms = ?, updated_at = ? WHERE id = ?`,
+      ).run(
+        next.status ?? existing.status,
+        next.inputData != null ? JSON.stringify(next.inputData) : null,
+        next.outputData != null ? JSON.stringify(next.outputData) : null,
+        next.errorMessage ?? existing.errorMessage,
+        next.attempts ?? existing.attempts,
+        next.durationMs ?? existing.durationMs,
+        new Date().toISOString(),
+        id,
+      );
+      return this.get(orgId, id);
+    },
+  };
+
+  const deploymentsRepo = {
+    create(record) {
+      const now = new Date().toISOString();
+      const id = record.id ?? `dep_${randomUUID()}`;
+      db.prepare(
+        `INSERT INTO deployments (id, org_id, project_id, platform, status, config, url, error_message, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        record.orgId,
+        record.projectId,
+        record.platform,
+        record.status ?? 'deploying',
+        record.config != null ? JSON.stringify(record.config) : '{}',
+        record.url ?? null,
+        record.errorMessage ?? null,
+        now,
+      );
+      return this.get(record.orgId, id);
+    },
+    get(orgId, id) {
+      const row = db.prepare('SELECT * FROM deployments WHERE id = ? AND org_id = ?').get(id, orgId);
+      return row ? rowToDeployment(row) : null;
+    },
+    listByProject(orgId, projectId) {
+      const rows = db
+        .prepare('SELECT * FROM deployments WHERE org_id = ? AND project_id = ? ORDER BY created_at DESC')
+        .all(orgId, projectId);
+      return rows.map(rowToDeployment);
+    },
+    update(orgId, id, patch) {
+      const existing = this.get(orgId, id);
+      if (!existing) return null;
+      const next = { ...existing, ...patch };
+      db.prepare(
+        'UPDATE deployments SET status = ?, config = ?, url = ?, error_message = ? WHERE id = ? AND org_id = ?',
+      ).run(
+        next.status ?? existing.status,
+        next.config != null ? JSON.stringify(next.config) : JSON.stringify(existing.config ?? {}),
+        next.url ?? existing.url,
+        next.errorMessage ?? existing.errorMessage,
+        id,
+        orgId,
+      );
+      return this.get(orgId, id);
+    },
+  };
+
   return {
     db,
     projects: projectRepo,
@@ -531,6 +697,9 @@ export function createSqliteRepos(filename = ':memory:', { log } = {}) {
     publications: publicationsRepo,
     usage: usageRepo,
     telemetry: telemetryRepo,
+    executions: executionsRepo,
+    executionSteps: executionStepsRepo,
+    deployments: deploymentsRepo,
     /**
      * Readiness probe for GET /api/health — one cheap round-trip. Never
      * throws: a broken database reports `{ ok: false, error }` so the health
@@ -708,6 +877,53 @@ function rowToPublication(row) {
     fileCount: row.file_count,
     latencyMs: row.latency_ms,
     workflowHash: row.workflow_hash,
+    createdAt: row.created_at,
+  };
+}
+
+function rowToExecution(row) {
+  return {
+    id: row.id,
+    orgId: row.org_id,
+    projectId: row.project_id,
+    workflowId: row.workflow_id,
+    status: row.status,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    durationMs: row.duration_ms,
+    errorMessage: row.error_message,
+    retryOf: row.retry_of,
+    createdAt: row.created_at,
+  };
+}
+
+function rowToExecutionStep(row) {
+  return {
+    id: row.id,
+    executionId: row.execution_id,
+    nodeId: row.node_id,
+    nodeType: row.node_type,
+    status: row.status,
+    inputData: row.input_data ? JSON.parse(row.input_data) : null,
+    outputData: row.output_data ? JSON.parse(row.output_data) : null,
+    errorMessage: row.error_message,
+    attempts: row.attempts ?? 1,
+    durationMs: row.duration_ms,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToDeployment(row) {
+  return {
+    id: row.id,
+    orgId: row.org_id,
+    projectId: row.project_id,
+    platform: row.platform,
+    status: row.status,
+    config: row.config ? JSON.parse(row.config) : {},
+    url: row.url,
+    errorMessage: row.error_message,
     createdAt: row.created_at,
   };
 }

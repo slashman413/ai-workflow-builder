@@ -106,6 +106,39 @@
  * TelemetryRepository:
  *   insert({ orgHash, event, props }) -> boolean   // pseudonymous local log
  *
+ * Increment 5 repository ports (execution engine + one-click deploy; both
+ * adapters implement all of these — see migration 0009):
+ *
+ * ExecutionRepository:
+ *   create(record)                 -> execution row
+ *   get(orgId, id)                 -> execution | null
+ *   listByProject(orgId, projectId)-> executions (newest first)
+ *   latestForProject(orgId, projectId) -> execution | null
+ *   update(orgId, id, patch)       -> execution | null
+ *   Execution row = { id, orgId, projectId, workflowId, status,
+ *                     startedAt, finishedAt, durationMs, errorMessage,
+ *                     retryOf, createdAt }
+ *   status ∈ queued|running|paused|succeeded|failed|cancelled
+ *
+ * ExecutionStepRepository (per-step log, cascades with its execution):
+ *   insert(record)                 -> step row
+ *   get(orgId, id)                 -> step | null
+ *   listByExecution(orgId, executionId) -> steps (ascending)
+ *   update(orgId, id, patch)       -> step | null
+ *   Step row = { id, executionId, nodeId, nodeType, status, inputData,
+ *                outputData, errorMessage, attempts, durationMs,
+ *                createdAt, updatedAt }
+ *   status ∈ queued|running|success|error|skipped|cancelled
+ *
+ * DeploymentRepository (one-click deploy ledger):
+ *   create(record)                 -> deployment row
+ *   get(orgId, id)                 -> deployment | null
+ *   listByProject(orgId, projectId)-> deployments (newest first)
+ *   update(orgId, id, patch)       -> deployment | null
+ *   Deployment row = { id, orgId, projectId, platform, status, config,
+ *                      url, errorMessage, createdAt }
+ *   status ∈ dry_run|deploying|deployed|failed
+ *
  * A Project bundles the raw prompt, the grill answers gathered so far, and the
  * derived spec snapshot:
  *   Project = { id, orgId, prompt, answers: Record<string,string>,

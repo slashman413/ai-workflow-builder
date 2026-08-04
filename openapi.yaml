@@ -1179,6 +1179,275 @@ paths:
         '400':
           description: Missing event name.
 
+  # --- Workflow execution (Increment 5) --------------------------------------
+  # POST /run executes the SAVED workflow through the built-in handlers
+  # (input/agent/tool/branch/output). Agent keys resolve from the org key
+  # vault; the Free plan is rejected with 402 before any run state is created.
+  /api/projects/{id}/run:
+    post:
+      tags: [execution]
+      summary: Run a project's saved workflow (Team tier)
+      description: |
+        Creates an execution row and starts the engine (detached — the run
+        proceeds asynchronously). Progress streams via
+        GET /projects/{id}/run/{execId}/events. Requires Team/trial (Free
+        answers 402 PAYMENT_REQUIRED). Optional `inputs` supplies user-mode
+        values to input nodes, keyed by node id.
+      operationId: runProject
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inputs:
+                  type: object
+                  additionalProperties: true
+                  description: 'nodeId -> { source -> value } for input nodes with mode=user.'
+      responses:
+        '201':
+          description: Execution started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Execution' }
+        '402':
+          description: Team subscription or trial required to run workflows.
+        '409':
+          description: No saved workflow for this project (NO_WORKFLOW).
+  /api/projects/{id}/run/cancel:
+    post:
+      tags: [execution]
+      summary: Cancel a running execution
+      operationId: cancelRun
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                execId: { type: string, description: Execution id (exec_…). }
+              required: [execId]
+      responses:
+        '200':
+          description: Cancellation requested; the execution row reflects status cancelled once the engine settles.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Execution' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Execution already finished (EXECUTION_FINISHED).
+  /api/projects/{id}/run/pause:
+    post:
+      tags: [execution]
+      summary: Pause dispatching new steps of a running execution
+      operationId: pauseRun
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                execId: { type: string }
+              required: [execId]
+      responses:
+        '200':
+          description: Execution paused (in-flight steps finish naturally).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Execution' }
+        '409':
+          description: Execution is not running (EXECUTION_NOT_RUNNING).
+  /api/projects/{id}/run/resume:
+    post:
+      tags: [execution]
+      summary: Resume a paused execution
+      operationId: resumeRun
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                execId: { type: string }
+              required: [execId]
+      responses:
+        '200':
+          description: Execution resumed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Execution' }
+        '409':
+          description: Execution is not paused (EXECUTION_NOT_PAUSED).
+  /api/projects/{id}/run/retry:
+    post:
+      tags: [execution]
+      summary: Re-run the latest (or a named) finished execution
+      description: |
+        Creates a NEW execution row linked to the source via retryOf —
+        history stays append-only. Defaults to the project's latest
+        execution; pass `execId` to retry a specific one.
+      operationId: retryRun
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                execId: { type: string, nullable: true }
+      responses:
+        '201':
+          description: Retry execution started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Execution' }
+        '402':
+          description: Team subscription or trial required.
+        '409':
+          description: Source execution still running (EXECUTION_RUNNING).
+  /api/projects/{id}/executions:
+    get:
+      tags: [execution]
+      summary: Execution history for a project
+      operationId: listExecutions
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Execution rows (newest first).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Execution' }
+  /api/projects/{id}/run/{execId}:
+    get:
+      tags: [execution]
+      summary: Execution detail with per-step logs
+      operationId: getExecution
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - name: execId
+          in: path
+          required: true
+          schema: { type: string }
+          description: Execution id (exec_…).
+      responses:
+        '200':
+          description: Execution row plus ordered execution_steps.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Execution'
+                  - type: object
+                    properties:
+                      steps:
+                        type: array
+                        items: { $ref: '#/components/schemas/ExecutionStep' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/projects/{id}/run/{execId}/events:
+    get:
+      tags: [execution]
+      summary: Realtime run stream (SSE)
+      description: |
+        Server-sent events for one execution: replays the current snapshot,
+        then pushes `execution` and `step` events as the engine logs them
+        (fetch-based streaming — the client sends auth headers).
+      operationId: streamExecutionEvents
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - name: execId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: text/event-stream with `execution` and `step` events.
+          content:
+            text/event-stream:
+              schema:
+                type: object
+                properties:
+                  type: { type: string, enum: [execution, step] }
+                  data: { type: object }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # --- One-click deploy (Increment 5) ----------------------------------------
+  /api/projects/{id}/deploy:
+    post:
+      tags: [deploy]
+      summary: Generate a one-click deployment for a project (Team tier)
+      description: |
+        Generates the platform scaffold (wrangler.toml / fly.toml /
+        Dockerfile), assigns a deterministic URL, and records the deployment.
+        dryRun=true returns the preview without writing files (status
+        `dry_run`). Team/trial only (Free answers 402).
+      operationId: deployProject
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                platform: { type: string, enum: [cloudflare, fly, docker], default: cloudflare }
+                dryRun: { type: boolean, default: false }
+      responses:
+        '201':
+          description: Deployment created (or dry-run preview).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Deployment' }
+        '402':
+          description: Team subscription or trial required.
+        '400':
+          description: Unknown platform (INVALID_PLATFORM).
+  /api/projects/{id}/deployments:
+    get:
+      tags: [deploy]
+      summary: Deployment history for a project
+      operationId: listDeployments
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Deployment rows (newest first).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Deployment' }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1494,3 +1763,62 @@ components:
         tokensRemaining: { type: integer }
         state: { type: string, enum: [open, closed] }
         closedReason: { type: string, nullable: true }
+
+    # --- Increment 5: execution + deployment schemas --------------------------
+    Execution:
+      type: object
+      description: One workflow run row (the run ledger).
+      properties:
+        id: { type: string, example: exec_9f1c… }
+        projectId: { type: string, format: uuid }
+        workflowId: { type: string }
+        status:
+          type: string
+          enum: [queued, running, paused, succeeded, failed, cancelled]
+        startedAt: { type: string, format: date-time, nullable: true }
+        finishedAt: { type: string, format: date-time, nullable: true }
+        durationMs: { type: integer, nullable: true }
+        errorMessage: { type: string, nullable: true }
+        retryOf: { type: string, nullable: true, description: Execution id this run retries (append-only history). }
+        createdAt: { type: string, format: date-time }
+      required: [id, projectId, workflowId, status, createdAt]
+
+    ExecutionStep:
+      type: object
+      description: One per-step log row (input/output snapshots, error, attempts).
+      properties:
+        id: { type: string }
+        executionId: { type: string }
+        nodeId: { type: string }
+        nodeType: { type: string, enum: [input, agent, tool, branch, output] }
+        status:
+          type: string
+          enum: [queued, running, success, error, skipped, cancelled]
+        inputData:
+          nullable: true
+          description: JSON snapshot of the upstream outputs the node read.
+        outputData:
+          nullable: true
+          description: JSON snapshot of the node's result (never key material).
+        errorMessage: { type: string, nullable: true }
+        attempts: { type: integer, description: How many times the handler ran (retries + 1). }
+        durationMs: { type: integer, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, executionId, nodeId, nodeType, status, createdAt]
+
+    Deployment:
+      type: object
+      description: One one-click deploy (or dry-run preview) row.
+      properties:
+        id: { type: string, example: dep_9f1c… }
+        projectId: { type: string, format: uuid }
+        platform: { type: string, enum: [cloudflare, fly, docker] }
+        status: { type: string, enum: [dry_run, deploying, deployed, failed] }
+        config:
+          type: object
+          additionalProperties: { type: string }
+          description: Generated scaffold files (wrangler.toml / fly.toml / Dockerfile).
+        url: { type: string, nullable: true, description: Assigned deployment target. }
+        errorMessage: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, projectId, platform, status, createdAt]

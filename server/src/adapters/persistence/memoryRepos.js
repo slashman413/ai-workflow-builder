@@ -432,6 +432,133 @@ export function createMemoryRepos() {
     },
   };
 
+  // ---------------------------------------------------------------------------
+  // Execution (Increment 5) — run ledger, per-step logs, deploy ledger. Mirrors
+  // the SQLite adapter (migration 0009) exactly: org-scoped lookups, cascading
+  // step rows, newest-first lists.
+  // ---------------------------------------------------------------------------
+  /** @type {Map<string, object>} id -> execution row */
+  const executions = new Map();
+  /** @type {Map<string, object>} id -> execution step row */
+  const executionSteps = new Map();
+  /** @type {Map<string, object>} id -> deployment row */
+  const deployments = new Map();
+
+  const executionsRepo = {
+    create(record) {
+      const now = new Date().toISOString();
+      const row = {
+        id: record.id ?? `exec_${randomUUID()}`,
+        orgId: record.orgId,
+        projectId: record.projectId,
+        workflowId: record.workflowId ?? '',
+        status: record.status ?? 'queued',
+        startedAt: record.startedAt ?? null,
+        finishedAt: record.finishedAt ?? null,
+        durationMs: record.durationMs ?? null,
+        errorMessage: record.errorMessage ?? null,
+        retryOf: record.retryOf ?? null,
+        createdAt: now,
+      };
+      executions.set(row.id, row);
+      return clone(row);
+    },
+    get(orgId, id) {
+      const row = executions.get(id);
+      return row && row.orgId === orgId ? clone(row) : null;
+    },
+    listByProject(orgId, projectId) {
+      return [...executions.values()]
+        .filter((e) => e.orgId === orgId && e.projectId === projectId)
+        .map(clone)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    },
+    latestForProject(orgId, projectId) {
+      const list = this.listByProject(orgId, projectId);
+      return list.length ? list[0] : null;
+    },
+    update(orgId, id, patch) {
+      const row = executions.get(id);
+      if (!row || row.orgId !== orgId) return null;
+      Object.assign(row, patch);
+      return clone(row);
+    },
+  };
+
+  const executionStepsRepo = {
+    insert(record) {
+      const now = new Date().toISOString();
+      const row = {
+        id: record.id ?? randomUUID(),
+        executionId: record.executionId,
+        orgId: record.orgId,
+        nodeId: record.nodeId,
+        nodeType: record.nodeType,
+        status: record.status ?? 'queued',
+        inputData: record.inputData ?? null,
+        outputData: record.outputData ?? null,
+        errorMessage: record.errorMessage ?? null,
+        attempts: record.attempts ?? 1,
+        durationMs: record.durationMs ?? null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      executionSteps.set(row.id, row);
+      return clone(row);
+    },
+    get(orgId, id) {
+      const row = executionSteps.get(id);
+      return row && row.orgId === orgId ? clone(row) : null;
+    },
+    listByExecution(orgId, executionId) {
+      return [...executionSteps.values()]
+        .filter((s) => s.orgId === orgId && s.executionId === executionId)
+        .map(clone)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    },
+    update(orgId, id, patch) {
+      const row = executionSteps.get(id);
+      if (!row || row.orgId !== orgId) return null;
+      Object.assign(row, patch, { updatedAt: new Date().toISOString() });
+      return clone(row);
+    },
+  };
+
+  const deploymentsRepo = {
+    create(record) {
+      const now = new Date().toISOString();
+      const row = {
+        id: record.id ?? `dep_${randomUUID()}`,
+        orgId: record.orgId,
+        projectId: record.projectId,
+        platform: record.platform,
+        status: record.status ?? 'deploying',
+        config: record.config ?? {},
+        url: record.url ?? null,
+        errorMessage: record.errorMessage ?? null,
+        createdAt: now,
+      };
+      deployments.set(row.id, row);
+      return clone(row);
+    },
+    get(orgId, id) {
+      const row = deployments.get(id);
+      return row && row.orgId === orgId ? clone(row) : null;
+    },
+    listByProject(orgId, projectId) {
+      return [...deployments.values()]
+        .filter((d) => d.orgId === orgId && d.projectId === projectId)
+        .map(clone)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    },
+    update(orgId, id, patch) {
+      const row = deployments.get(id);
+      if (!row || row.orgId !== orgId) return null;
+      Object.assign(row, patch);
+      return clone(row);
+    },
+  };
+
   return {
     projects: projectRepo,
     workflows: workflowRepo,
@@ -443,6 +570,9 @@ export function createMemoryRepos() {
     publications: publicationsRepo,
     usage: usageRepo,
     telemetry: telemetryRepo,
+    executions: executionsRepo,
+    executionSteps: executionStepsRepo,
+    deployments: deploymentsRepo,
     /** Readiness probe for GET /api/health — always ready, zero latency. */
     ping() {
       return { ok: true, latencyMs: 0 };

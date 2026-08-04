@@ -50,12 +50,14 @@ const SERVICE = (() => {
  * @param {import('../../application/billingService.js').BillingService} deps.billingService
  * @param {import('../../application/entitlementService.js').EntitlementService} deps.entitlementService
  * @param {import('../../application/telemetryService.js').TelemetryService} deps.telemetryService
+ * @param {import('../../application/executionService.js').ExecutionService} deps.executionService
+ * @param {import('../../application/deployService.js').DeployService} deps.deployService
  * @param {import('./auth.js').createAuth} deps.requireOrg
  * @param {import('./auth.js').createAuth} deps.requireRole
  * @param {() => Promise<{ok: boolean, latencyMs?: number, error?: string}>} deps.checkHealth
  *   Live storage readiness probe (see app.js).
  */
-export function createRouter({ service, vaultService, catalogService, grillStream, publishService, billingService, entitlementService, telemetryService, requireOrg, requireRole, checkHealth }) {
+export function createRouter({ service, vaultService, catalogService, grillStream, publishService, billingService, entitlementService, telemetryService, executionService, deployService, requireOrg, requireRole, checkHealth }) {
   const router = Router();
 
   const wrap = (fn) => (req, res) => {
@@ -458,6 +460,110 @@ export function createRouter({ service, vaultService, catalogService, grillStrea
     telemetryService.capture(req.orgId, event, { ...(props ?? {}), tier: entitlementService.resolveTier(req.orgId) });
     return { captured: true, event };
   }));
+
+  // --- Workflow execution (Increment 5) -------------------------------------
+  // The production runtime: POST /projects/:id/run executes the SAVED
+  // workflow through the built-in handlers (input/agent/tool/branch/output).
+  // Agent keys come from the vault; Free plan is rejected with 402 before any
+  // run state is created. Progress streams over SSE at
+  // GET /projects/:id/run/:execId/events (fetch-based streaming — the client
+  // sends auth headers, so EventSource is not used).
+  //
+  // Route order matters: the specific /run/cancel|pause|resume|retry routes
+  // MUST be registered before /run/:execId or 'cancel' would be captured as
+  // an execution id.
+  router.post('/projects/:id/run', requireOrg, requireRole('architect'), wrapAsync(async (req) => {
+    const execution = executionService.start(req.orgId, req.params.id, { inputs: req.body?.inputs });
+    return withStatus(execution, 201);
+  }));
+
+  router.post('/projects/:id/run/cancel', requireOrg, requireRole('architect'), wrap((req) =>
+    executionService.cancel(req.orgId, req.params.id, req.body?.execId),
+  ));
+
+  router.post('/projects/:id/run/pause', requireOrg, requireRole('architect'), wrap((req) =>
+    executionService.pause(req.orgId, req.params.id, req.body?.execId),
+  ));
+
+  router.post('/projects/:id/run/resume', requireOrg, requireRole('architect'), wrap((req) =>
+    executionService.resume(req.orgId, req.params.id, req.body?.execId),
+  ));
+
+  // Re-run the latest (or a named) finished execution as a NEW run linked
+  // via retryOf — history stays append-only.
+  router.post('/projects/:id/run/retry', requireOrg, requireRole('architect'), wrapAsync((req) => {
+    const execution = executionService.retry(req.orgId, req.params.id, { execId: req.body?.execId ?? null });
+    return withStatus(execution, 201);
+  }));
+
+  router.get('/projects/:id/executions', requireOrg, requireRole('viewer'), wrap((req) =>
+    executionService.list(req.orgId, req.params.id),
+  ));
+
+  router.get('/projects/:id/run/:execId', requireOrg, requireRole('viewer'), wrap((req) =>
+    executionService.get(req.orgId, req.params.id, req.params.execId),
+  ));
+
+  // Real-time run stream (SSE). Replays the current state first, then pushes
+  // step/execution events as the engine logs them.
+  router.get('/projects/:id/run/:execId/events', requireOrg, requireRole('viewer'), (req, res) => {
+    let execution;
+    try {
+      execution = executionService.get(req.orgId, req.params.id, req.params.execId);
+    } catch (err) {
+      if (err instanceof AppError) {
+        return res.status(err.status).json({ error: err.code, message: err.message });
+      }
+      return res.status(500).json({ error: 'INTERNAL', message: 'Unexpected server error.' });
+    }
+
+    sseHeaders(res);
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        clearInterval(heartbeat);
+      }
+    }, 15_000);
+    res.on('close', () => clearInterval(heartbeat));
+
+    const send = (event) => {
+      try {
+        res.write(`event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`);
+      } catch {
+        /* client gone */
+      }
+    };
+
+    // Replay: the full current snapshot (execution + steps) first.
+    send({ type: 'execution', data: execution });
+    for (const step of execution.steps ?? []) send({ type: 'step', data: step });
+
+    const subscriber = executionService.subscribe(req.params.execId, send);
+    res.on('close', () => executionService.unsubscribe(req.params.execId, subscriber));
+  });
+
+  // --- One-click deploy (Increment 5) ---------------------------------------
+  // POST /projects/:id/deploy generates the platform scaffold (wrangler.toml
+  // / fly.toml / Dockerfile), assigns a deterministic URL, and records the
+  // deployment. dryRun=true returns the preview without writing files and
+  // marks the row status `dry_run`. Team/trial only (Free → 402).
+  router.post('/projects/:id/deploy', requireOrg, requireRole('architect'), wrapAsync((req) => {
+    const deployment = deployService.deploy(req.orgId, req.params.id, {
+      platform: req.body?.platform ?? 'cloudflare',
+      dryRun: req.body?.dryRun === true,
+    });
+    telemetryService.capture(req.orgId, 'deployment_created', {
+      tier: entitlementService.resolveTier(req.orgId),
+      mode: req.body?.dryRun === true ? 'dry_run' : 'live',
+      outcome: 'ok',
+    });
+    return withStatus(deployment, 201);
+  }));
+
+  router.get('/projects/:id/deployments', requireOrg, requireRole('viewer'), wrap((req) =>
+    deployService.list(req.orgId, req.params.id),
+  ));
 
   return router;
 }

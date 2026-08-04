@@ -25,6 +25,8 @@ import { PublishService } from '../../application/publishService.js';
 import { BillingService } from '../../application/billingService.js';
 import { EntitlementService } from '../../application/entitlementService.js';
 import { TelemetryService } from '../../application/telemetryService.js';
+import { ExecutionService } from '../../application/executionService.js';
+import { DeployService } from '../../application/deployService.js';
 import { createPosthogAdapter } from '../analytics/posthogAdapter.js';
 import { createOAuthStateStore } from '../github/oauth.js';
 import { createGithubClient } from '../../domain/publish/githubClient.js';
@@ -94,13 +96,31 @@ export function createApp(repos, { auth = { mode: 'test' }, kek, catalog, grillS
     adapter: telemetryOpts?.adapter ?? createPosthogAdapter({ apiKey: env.POSTHOG_API_KEY, host: env.POSTHOG_HOST }),
     salt: telemetryOpts?.salt ?? 'workflow-builders',
   });
+  // Increment 5: the execution engine (runs the saved workflow DAG with the
+  // built-in handlers) and the one-click deploy scaffold generator.
+  const executionService = new ExecutionService(
+    {
+      service,
+      entitlementService,
+      vaultService,
+      catalogService,
+      telemetryService,
+      executions: repos.executions,
+      executionSteps: repos.executionSteps,
+    },
+    { env, options: { handlers: undefined }, dataDir: env.DATA_DIR ?? `${process.cwd()}/data/executions` },
+  );
+  const deployService = new DeployService(
+    { service, entitlementService, deployments: repos.deployments },
+    { env, baseDir: env.DEPLOY_DIR ?? `${process.cwd()}/data/deployments` },
+  );
 
   // Readiness probe for the health endpoint: delegate to the storage
   // adapter's `ping` (SELECT 1 for SQLite, trivially ok in memory). Fall
   // back to "healthy" only if an adapter ever lacks a ping.
   const checkHealth = repos.ping ? () => repos.ping() : () => ({ ok: true, note: 'adapter without ping' });
 
-  app.use('/api', createRouter({ service, vaultService, catalogService, grillStream, publishService, billingService, entitlementService, telemetryService, requireOrg, requireRole, checkHealth }));
+  app.use('/api', createRouter({ service, vaultService, catalogService, grillStream, publishService, billingService, entitlementService, telemetryService, executionService, deployService, requireOrg, requireRole, checkHealth }));
 
   // Fallback 404 for unknown API routes.
   app.use('/api', (_req, res) => res.status(404).json({ error: 'NOT_FOUND', message: 'Unknown endpoint.' }));

@@ -29,6 +29,7 @@ export const TIER_POLICY = Object.freeze({
     label: 'Free',
     grillSessionsPerMonth: 10,
     exports: false,
+    executions: false, // Free plan cannot RUN workflows (Inc 5)
     unlimitedGrill: false,
     preview: 'mock',
   },
@@ -37,6 +38,7 @@ export const TIER_POLICY = Object.freeze({
     label: 'Trial',
     grillSessionsPerMonth: null, // unlimited
     exports: true,
+    executions: true,
     unlimitedGrill: true,
     preview: 'simulated',
   },
@@ -45,6 +47,7 @@ export const TIER_POLICY = Object.freeze({
     label: 'Team',
     grillSessionsPerMonth: null, // unlimited
     exports: true,
+    executions: true,
     unlimitedGrill: true,
     preview: 'simulated',
   },
@@ -56,6 +59,7 @@ const PAID_STATUSES = new Set(['active', 'past_due']);
 /** The usage metric counted against the monthly Grill cap. */
 export const GRILL_USAGE_METRIC = 'grill_session_started';
 export const EXPORT_USAGE_METRIC = 'export_completed';
+export const EXECUTION_USAGE_METRIC = 'execution_started';
 
 /** Current billing period key: 'YYYY-MM'. */
 export function periodFor(date = new Date()) {
@@ -102,6 +106,7 @@ export class EntitlementService {
       limits: {
         grillSessionsPerMonth: policy.grillSessionsPerMonth,
         exports: policy.exports,
+        executions: policy.executions,
         unlimitedGrill: policy.unlimitedGrill,
         preview: policy.preview,
       },
@@ -165,6 +170,26 @@ export class EntitlementService {
       );
     }
     this.usageRepo.increment(orgId, EXPORT_USAGE_METRIC, periodFor(this.now()), 1);
+    return this.entitlement(orgId);
+  }
+
+  /**
+   * Gate for RUNNING workflows (Increment 5): Free plan is preview-only
+   * (mock simulation), Team/trial executes for real. Called BEFORE an
+   * execution row is created, so a blocked org never consumes run state.
+   */
+  assertExecutionAllowed(orgId) {
+    assertOrg(orgId);
+    const tier = this.resolveTier(orgId);
+    if (!TIER_POLICY[tier].executions) {
+      throw new AppError(
+        'PAYMENT_REQUIRED',
+        'Running workflows requires the Team plan ($99/mo) or an active trial. The Free plan is limited to safe simulations.',
+        402,
+        { tier, requiredTier: 'team' },
+      );
+    }
+    this.usageRepo.increment(orgId, EXECUTION_USAGE_METRIC, periodFor(this.now()), 1);
     return this.entitlement(orgId);
   }
 }
