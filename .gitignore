@@ -24,3 +24,5 @@ coverage/
 server/data/*.db
 *.db
 app.db
+# Deployment artifacts
+data/deployments/

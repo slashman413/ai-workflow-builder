@@ -18,6 +18,8 @@ import '@xyflow/react/dist/style.css';
 import { api } from '../api/client.js';
 import { DND_MIME } from './MarketplaceSidebar.jsx';
 import { GithubExportPanel } from './GithubExportPanel.jsx';
+import { ExecutionDashboard } from './ExecutionDashboard/index.jsx';
+import { DeployPanel } from './DeployPanel/index.jsx';
 
 /**
  * WorkflowView.jsx — the interactive visual graph canvas (Increment 3).
@@ -374,6 +376,24 @@ function Canvas({ workflow, projectId, canEdit, onReset, entitlement, onEntitlem
 
       <GithubExportPanel
         projectId={projectId}
+        canEdit={canEdit}
+        entitlement={entitlement}
+        onEntitlementChanged={onEntitlementChanged}
+      />
+
+      <DeployPanel
+        projectId={projectId}
+        canEdit={canEdit}
+        entitlement={entitlement}
+        onEntitlementChanged={onEntitlementChanged}
+      />
+
+      {/* Increment 5: run + live status + history. Runs the SAVED workflow —
+          the Run button persists the current canvas first. */}
+      <ExecutionDashboard
+        projectId={projectId}
+        workflow={workflow}
+        getWorkflow={() => toWorkflow(nodes, edges, workflowRef.current)}
         canEdit={canEdit}
         entitlement={entitlement}
         onEntitlementChanged={onEntitlementChanged}

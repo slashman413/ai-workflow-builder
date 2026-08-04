@@ -430,3 +430,137 @@ button.link {
 .pub-ledger summary { cursor: pointer; color: #8ecdf8; }
 .pub-ledger ul { margin: 8px 0 0; padding-left: 18px; }
 .pub-ledger a { color: #8ecdf8; }
+
+/* ===========================================================================
+   Increment 5 — execution dashboard + one-click deploy
+   ========================================================================== */
+
+/* ---- run status badges (execution + steps) ------------------------------ */
+.exec-status {
+  display: inline-block;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--line);
+  color: #c8cdd6;
+  background: #16181d;
+  white-space: nowrap;
+}
+.exec-status-running, .exec-status-queued { color: #8ecdf8; border-color: #2b4a66; }
+.exec-status-success  { color: #6ee7a8; border-color: #2b5a44; }
+.exec-status-error, .exec-status-failed { color: #f87171; border-color: #6b2b2b; }
+.exec-status-skipped  { color: #9aa0ab; border-color: #3a3f47; }
+.exec-status-cancelled{ color: #d8b06a; border-color: #5a4a2a; }
+.exec-status-paused   { color: #fbbf24; border-color: #5a4a2a; }
+.exec-status-dry_run  { color: #8ecdf8; border-color: #2b4a66; }
+.exec-status-deployed { color: #6ee7a8; border-color: #2b5a44; }
+
+/* ---- dashboard layout --------------------------------------------------- */
+.exec-dashboard { margin-top: 1rem; }
+.exec-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.exec-head h3, .exec-head h4 { margin: 0; }
+.exec-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.6rem 0; }
+.exec-controls button { margin: 0; }
+
+.pipeline-pane { position: relative; }
+.pipeline-live-badge {
+  position: absolute; top: 10px; right: 12px; z-index: 5;
+  font-size: 0.72rem; color: #6ee7a8; background: #101418cc;
+  border: 1px solid #2b5a44; border-radius: 999px; padding: 0.15rem 0.6rem;
+  animation: exec-pulse 1.4s ease-in-out infinite;
+}
+@keyframes exec-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+/* live node statuses (PipelineView) */
+.wf-node.run-running { border-left-color: #0091ff; box-shadow: 0 0 18px rgba(0, 145, 255, 0.35); }
+.wf-node.run-running .badge { animation: exec-pulse 1s ease-in-out infinite; }
+.wf-node.run-success { border-left-color: #30a46c; }
+.wf-node.run-error   { border-left-color: #e5484d; box-shadow: 0 0 0 2px rgba(229, 72, 77, 0.4); }
+.wf-node.run-skipped, .wf-node.run-cancelled { opacity: 0.55; border-left-color: #5a5f66; }
+.run-node-meta {
+  display: flex; align-items: center; gap: 0.4rem; margin-top: 0.4rem;
+  font-size: 0.72rem; color: #c8cdd6; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.run-dot { width: 8px; height: 8px; border-radius: 50%; background: #5a5f66; }
+.run-dot.run-running { background: #0091ff; animation: exec-pulse 1s infinite; }
+.run-dot.run-success { background: #30a46c; }
+.run-dot.run-error   { background: #e5484d; }
+.run-dot.run-skipped { background: #5a5f66; }
+.run-node-error {
+  margin-top: 0.35rem; color: #f87171; font-size: 0.72rem;
+  border: 1px solid #6b2b2b; border-radius: 6px; padding: 0.25rem 0.45rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ---- detail grid: StepPanel + Timeline ---------------------------------- */
+.exec-detail-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem;
+}
+@media (max-width: 860px) { .exec-detail-grid { grid-template-columns: 1fr; } }
+.step-panel, .timeline {
+  border: 1px solid var(--line); border-radius: 10px; padding: 0.75rem;
+  background: #0f1115;
+}
+.step-panel h4, .timeline h4 { margin: 0 0 0.5rem; font-size: 0.92rem; }
+.step-panel h4 code { color: #8ecdf8; margin-right: 0.5rem; }
+.step-meta {
+  display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; margin: 0 0 0.5rem;
+  font-size: 0.8rem; color: #c8cdd6;
+}
+.step-meta dt { color: #8b919c; }
+.step-meta dd { margin: 0; }
+.step-error {
+  border: 1px solid #6b2b2b; background: #2a1515; color: #f87171;
+  border-radius: 8px; padding: 0.5rem 0.65rem; margin: 0.5rem 0; font-size: 0.82rem;
+  word-break: break-word;
+}
+.step-json { margin-top: 0.5rem; border: 1px solid var(--line); border-radius: 8px; }
+.step-json summary { cursor: pointer; padding: 0.4rem 0.6rem; font-size: 0.8rem; color: #8ecdf8; }
+.step-json pre { margin: 0; max-height: 280px; overflow: auto; border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; }
+
+.timeline-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow: auto; }
+.timeline-row {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%;
+  background: transparent; border: 1px solid transparent; border-radius: 8px;
+  padding: 0.35rem 0.5rem; text-align: left; color: inherit;
+}
+.timeline-row:hover { background: #16181d; }
+.timeline-row.selected { border-color: var(--accent); background: #131a24; }
+.timeline-row code { color: #c8cdd6; }
+.timeline-error { margin: 0 0 0.4rem; font-size: 0.74rem; color: #f87171; padding-left: 0.5rem; }
+
+/* ---- history ------------------------------------------------------------ */
+.exec-history { margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 0.75rem; }
+.exec-history h4 { margin: 0 0 0.5rem; font-size: 0.92rem; }
+.exec-history ul { list-style: none; margin: 0; padding: 0; }
+.exec-history-row {
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.exec-history-row .project-row { flex: 1; }
+.exec-history-row button.ghost { margin: 0; }
+
+/* ---- deploy panel ------------------------------------------------------- */
+.deploy-panel { margin-top: 1rem; }
+.deploy-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin: 0.6rem 0; }
+.platform-selector { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.platform-option {
+  background: transparent; border: none; border-right: 1px solid var(--line);
+  color: #c8cdd6; padding: 0.45rem 0.7rem; font-size: 0.82rem; margin: 0;
+}
+.platform-option:last-child { border-right: none; }
+.platform-option.active { background: #131a24; color: #8ecdf8; }
+.deploy-dryrun { display: flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; color: #c8cdd6; }
+.deploy-status {
+  border: 1px solid var(--line); border-radius: 10px; padding: 0.75rem; margin-top: 0.6rem;
+  background: #0f1115;
+}
+.deploy-status-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.deploy-url { color: #6ee7a8; font-weight: 600; }
+.deploy-configs { margin-top: 0.6rem; }
+.deploy-configs h5 { margin: 0 0 0.4rem; font-size: 0.82rem; color: #8b919c; }

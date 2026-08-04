@@ -110,6 +110,64 @@ export const api = {
     capture: (event, props = {}) =>
       request('/telemetry/events', { method: 'POST', body: JSON.stringify({ event, props }) }),
   },
+  /** Workflow execution (Increment 5) — run, control, history, retry. */
+  executions: {
+    run: (projectId, inputs = {}) =>
+      request(`/projects/${projectId}/run`, { method: 'POST', body: JSON.stringify({ inputs }) }),
+    cancel: (projectId, execId) =>
+      request(`/projects/${projectId}/run/cancel`, { method: 'POST', body: JSON.stringify({ execId }) }),
+    pause: (projectId, execId) =>
+      request(`/projects/${projectId}/run/pause`, { method: 'POST', body: JSON.stringify({ execId }) }),
+    resume: (projectId, execId) =>
+      request(`/projects/${projectId}/run/resume`, { method: 'POST', body: JSON.stringify({ execId }) }),
+    retry: (projectId, execId = null) =>
+      request(`/projects/${projectId}/run/retry`, { method: 'POST', body: JSON.stringify({ execId }) }),
+    get: (projectId, execId) => request(`/projects/${projectId}/run/${execId}`),
+    list: (projectId) => request(`/projects/${projectId}/executions`),
+    /**
+     * Realtime run stream (SSE via fetch — EventSource cannot send the auth
+     * headers this API requires). Auto-reconnects with backoff until the
+     * stream ends cleanly or `stop` is called. Returns the stop function.
+     */
+    stream: (projectId, execId, { onEvent, signal } = {}) => {
+      let stopped = false;
+      let attempts = 0;
+      const controller = new AbortController();
+      const stop = () => {
+        stopped = true;
+        controller.abort();
+        signal?.removeEventListener('abort', stop);
+      };
+      signal?.addEventListener('abort', stop, { once: true });
+      const connect = async () => {
+        while (!stopped) {
+          try {
+            attempts += 1;
+            await streamSSE(`/projects/${projectId}/run/${execId}/events`, {
+              onEvent,
+              signal: controller.signal,
+            });
+            return; // clean end of stream
+          } catch (err) {
+            if (stopped || controller.signal.aborted) return;
+            onEvent?.('__error', { message: err instanceof Error ? err.message : String(err) });
+            await new Promise((r) => setTimeout(r, Math.min(400 * attempts, 2500)));
+          }
+        }
+      };
+      connect();
+      return stop;
+    },
+  },
+  /** One-click deploy (Increment 5). */
+  deploys: {
+    create: (projectId, { platform = 'cloudflare', dryRun = false } = {}) =>
+      request(`/projects/${projectId}/deploy`, {
+        method: 'POST',
+        body: JSON.stringify({ platform, dryRun }),
+      }),
+    list: (projectId) => request(`/projects/${projectId}/deployments`),
+  },
   /** Ecosystem catalogs (Increment 3) — the Agent Marketplace + Cognitive
    * Lens selector. All read-only, global MIT data; any authenticated org.
    */
@@ -136,3 +194,50 @@ export const api = {
     checkUpdates: () => request('/skills/check-updates'),
   },
 };
+
+/**
+ * streamSSE — consume a server-sent-events endpoint via fetch so the auth
+ * headers (Bearer token, org id) are sent — EventSource cannot set headers.
+ * Parses `event:` / `data:` frames and calls onEvent(eventName, payload).
+ * Resolves when the stream ends; rejects on network errors (callers retry).
+ */
+async function streamSSE(path, { onEvent, signal } = {}) {
+  const headers = { accept: 'text/event-stream' };
+  if (auth.token) headers.authorization = `Bearer ${auth.token}`;
+  if (auth.orgId) headers['x-org-id'] = auth.orgId;
+  const res = await fetch(BASE + path, { headers, signal });
+  if (!res.ok || !res.body) {
+    const body = res.status === 204 ? null : await res.json().catch(() => null);
+    throw new ApiError(res.status, body);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const dispatch = (eventName, raw) => {
+    let data = raw;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      /* non-JSON payloads pass through as strings */
+    }
+    onEvent?.(eventName, data);
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary;
+    while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+      const frame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      let eventName = 'message';
+      let data = '';
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('event:')) eventName = line.slice(6).trim();
+        else if (line.startsWith('data:')) data += `${line.slice(5).trim()}\n`;
+      }
+      if (data.trim()) dispatch(eventName, data.trim());
+    }
+  }
+  onEvent?.('__end', {});
+}
