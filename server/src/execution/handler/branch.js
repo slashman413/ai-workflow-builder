@@ -52,7 +52,10 @@ export function compare(actual, op, expected) {
 export function evaluateWhen(when, ctx, contextText) {
   if (!when || typeof when !== 'object') return false;
   if (when.nodeId) {
-    return compare(ctx.get(when.nodeId), when.op, when.value);
+    // Optional `field` refines the comparison to a dotted path of the node
+    // output; otherwise the whole output is compared.
+    const value = when.field ? deepGet(ctx.get(when.nodeId), when.field) : ctx.get(when.nodeId);
+    return compare(value, when.op, when.value);
   }
   if (when.field) {
     return compare(deepGet(JSON.parse(contextText), when.field), when.op, when.value);

@@ -19,7 +19,8 @@ export async function outputHandler(ctx) {
   const payload = serializeContext(ctx);
   const delivered = {};
   for (const target of targets) {
-    delivered[target] = await deliverTarget(target, payload, ctx.dataDir);
+    // fetchFn is injected so webhook deliveries are testable/cancellable.
+    delivered[target] = await deliverTarget(target, payload, ctx.dataDir, ctx.fetchFn);
   }
   return delivered;
 }

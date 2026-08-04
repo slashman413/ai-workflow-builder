@@ -142,7 +142,7 @@ export function extractText(provider, data) {
  */
 export async function agentHandler(ctx) {
   const config = ctx.node.config ?? {};
-  const provider = config.provider && provider in PROVIDERS ? config.provider : 'openai';
+  const provider = config.provider && config.provider in PROVIDERS ? config.provider : 'openai';
   const objective = config.objective || ctx.node.name || 'achieve the goal';
   const prompt = buildPrompt(objective, serializeContext(ctx));
   const { apiKey } = resolveVaultKey(ctx, provider);

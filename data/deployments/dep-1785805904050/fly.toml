@@ -1,0 +1,14 @@
+app = "my-awesome-workflow-abc"
+primary_region = "sin"
+
+[build]
+  image = "node:22"
+
+[env]
+  WORKFLOW_ID = "wf_dep"
+  WORKFLOW_NODES = "1"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true

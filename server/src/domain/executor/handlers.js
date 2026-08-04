@@ -118,14 +118,14 @@ export function checkRule(rule, contextText) {
 }
 
 /** Deliver results to a webhook, an email draft, or a JSON file. */
-export async function deliverTarget(target, payload, dir = 'outputs') {
+export async function deliverTarget(target, payload, dir = 'outputs', fetchFn = fetch) {
   const slug =
     String(target)
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'output';
   if (/^https?:\/\//.test(target)) {
-    const res = await fetch(target, {
+    const res = await fetchFn(target, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target, payload: safeParse(payload) }),

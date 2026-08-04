@@ -59,7 +59,12 @@ export class ExecutionEngine {
     this.logger = logger;
     this.injections = injections;
     this.options = options;
-    this.defaults = { ...DEFAULTS, ...(options.defaults ?? {}) };
+    this.defaults = {
+      ...DEFAULTS,
+      ...(options.defaults ?? {}),
+      // options.concurrency is the ergonomic per-run override.
+      CONCURRENCY: options.concurrency ?? options.defaults?.CONCURRENCY ?? DEFAULTS.CONCURRENCY,
+    };
     this.handlers = { ...DEFAULT_HANDLERS, ...(options.handlers ?? {}) };
 
     this.control = {
@@ -72,6 +77,8 @@ export class ExecutionEngine {
     // Run state (the engine is single-run; created per execution).
     this.validationError = null;
     this.startedAtMs = 0;
+    this.aborted = false; // set when an unhandled step failure aborts the run
+    this.abortError = null;
     this.sortedNodes = [];
     this.context = null;
     this.completed = new Map(); // nodeId -> { status, output?, error?, step? }
@@ -103,7 +110,7 @@ export class ExecutionEngine {
    * @returns {Promise<object>} the final execution row
    */
   async run() {
-    const { workflow, execution, logger, injections } = this;
+    const { execution, logger, injections } = this;
     if (!this.#prepare()) {
       return this.#finalize(EXECUTION_STATUS.FAILED, this.validationError);
     }
@@ -199,9 +206,12 @@ export class ExecutionEngine {
       return this.#finalize(EXECUTION_STATUS.CANCELLED, null);
     }
 
-    const failed = [...this.completed.values()].find((c) => c.status === STEP_STATUS.ERROR);
-    if (failed) {
-      return this.#finalize(EXECUTION_STATUS.FAILED, failed.error ?? 'workflow step failed');
+    // A run is FAILED only when an unhandled step error aborted it. With
+    // continue-on-error (or a recovered error-handler branch) the run
+    // COMPLETES — per-step errors stay visible in the ledger, but the run
+    // itself succeeded.
+    if (this.aborted) {
+      return this.#finalize(EXECUTION_STATUS.FAILED, this.abortError ?? 'workflow step failed');
     }
     return this.#finalize(EXECUTION_STATUS.SUCCEEDED, null);
   }
@@ -247,7 +257,7 @@ export class ExecutionEngine {
    * branch decision, and attempt error recovery before aborting.
    */
   async #onStepSettled(node, result) {
-    const { context, logger, execution } = this;
+    const { context } = this;
     if (result.status === 'success') {
       context.outputs[node.id] = result.output;
       context.ran.add(node.id);
@@ -277,6 +287,8 @@ export class ExecutionEngine {
     // config.handles / config.onError for this node may recover the run.
     const recovered = await this.#tryErrorHandler(node.id);
     if (!recovered) {
+      this.aborted = true;
+      this.abortError = result.error;
       for (const n of this.sortedNodes) {
         if (this.completed.has(n.id) || this.running.has(n.id)) continue;
         this.#skipNode(n, `workflow aborted at "${node.id}": ${result.error}`);

@@ -443,6 +443,14 @@ export function createMemoryRepos() {
   const executionSteps = new Map();
   /** @type {Map<string, object>} id -> deployment row */
   const deployments = new Map();
+  // Monotonic insertion counters — the "newest first" sort must be stable
+  // even when several rows share the same createdAt millisecond.
+  let executionSeq = 0;
+  let deploymentSeq = 0;
+  /** @type {Map<string, number>} id -> insertion order */
+  const executionOrder = new Map();
+  /** @type {Map<string, number>} id -> insertion order */
+  const deploymentOrder = new Map();
 
   const executionsRepo = {
     create(record) {
@@ -461,6 +469,7 @@ export function createMemoryRepos() {
         createdAt: now,
       };
       executions.set(row.id, row);
+      executionOrder.set(row.id, ++executionSeq);
       return clone(row);
     },
     get(orgId, id) {
@@ -471,7 +480,7 @@ export function createMemoryRepos() {
       return [...executions.values()]
         .filter((e) => e.orgId === orgId && e.projectId === projectId)
         .map(clone)
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || executionOrder.get(b.id) - executionOrder.get(a.id));
     },
     latestForProject(orgId, projectId) {
       const list = this.listByProject(orgId, projectId);
@@ -539,6 +548,7 @@ export function createMemoryRepos() {
         createdAt: now,
       };
       deployments.set(row.id, row);
+      deploymentOrder.set(row.id, ++deploymentSeq);
       return clone(row);
     },
     get(orgId, id) {
@@ -549,7 +559,7 @@ export function createMemoryRepos() {
       return [...deployments.values()]
         .filter((d) => d.orgId === orgId && d.projectId === projectId)
         .map(clone)
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || deploymentOrder.get(b.id) - deploymentOrder.get(a.id));
     },
     update(orgId, id, patch) {
       const row = deployments.get(id);

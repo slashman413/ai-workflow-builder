@@ -49,9 +49,12 @@ import { AppError } from '../../application/projectService.js';
  * @param {object} [opts.billing] BillingService overrides (stripe client,
  *   webhook secret, env).
  * @param {object} [opts.telemetry] Telemetry overrides (adapter, salt).
+ * @param {object} [opts.execution] ExecutionService overrides (engine
+ *   options/handlers, data dir — tests inject mock handlers here).
+ * @param {object} [opts.deploy] DeployService overrides (base dir).
  * @param {object} [opts.env] Environment snapshot (tests).
  */
-export function createApp(repos, { auth = { mode: 'test' }, kek, catalog, grillStream: grillStreamOpts, publish: publishOpts, billing: billingOpts, telemetry: telemetryOpts, env = process.env } = {}) {
+export function createApp(repos, { auth = { mode: 'test' }, kek, catalog, grillStream: grillStreamOpts, publish: publishOpts, billing: billingOpts, telemetry: telemetryOpts, execution: executionOpts, deploy: deployOpts, env = process.env } = {}) {
   const app = express();
   // Cross-origin policy runs before anything else so pre-flight requests are
   // answered without touching the JSON parser or the router.
@@ -108,11 +111,15 @@ export function createApp(repos, { auth = { mode: 'test' }, kek, catalog, grillS
       executions: repos.executions,
       executionSteps: repos.executionSteps,
     },
-    { env, options: { handlers: undefined }, dataDir: env.DATA_DIR ?? `${process.cwd()}/data/executions` },
+    {
+      env,
+      options: executionOpts?.options ?? {},
+      dataDir: executionOpts?.dataDir ?? env.DATA_DIR ?? `${process.cwd()}/data/executions`,
+    },
   );
   const deployService = new DeployService(
     { service, entitlementService, deployments: repos.deployments },
-    { env, baseDir: env.DEPLOY_DIR ?? `${process.cwd()}/data/deployments` },
+    { env, baseDir: deployOpts?.baseDir ?? env.DEPLOY_DIR ?? `${process.cwd()}/data/deployments` },
   );
 
   // Readiness probe for the health endpoint: delegate to the storage

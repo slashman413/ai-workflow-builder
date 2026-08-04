@@ -37,7 +37,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { simulateWorkflow } from '../src/domain/executor/simulation.js';
 

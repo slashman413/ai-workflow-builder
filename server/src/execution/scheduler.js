@@ -52,7 +52,6 @@ export async function executeNode({ node, handler, ctx, logger, execution, signa
 
   const started = Date.now();
   let attempts = 0;
-  let lastError = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     attempts = attempt + 1;
@@ -83,7 +82,24 @@ export async function executeNode({ node, handler, ctx, logger, execution, signa
         durationMs: Date.now() - started,
         attempts,
       });
-      const output = await handler({ ...ctx, signal: attemptSignal });
+      // Hard bound: the handler races the abort signal, so a misbehaving
+      // handler (plain timers, long compute) is still cut off at timeoutMs
+      // even when it never touches the signal itself.
+      const output = await Promise.race([
+        handler({ ...ctx, signal: attemptSignal }),
+        new Promise((_resolve, reject) => {
+          attemptSignal.addEventListener(
+            'abort',
+            () => {
+              const cancelled = signal?.aborted === true;
+              const err = new Error(cancelled ? 'execution cancelled' : `step timed out after ${timeoutMs}ms`);
+              err.name = cancelled ? 'AbortError' : 'TimeoutError';
+              reject(err);
+            },
+            { once: true },
+          );
+        }),
+      ]);
       if (signal?.aborted) {
         const final = logger.stepFinished(execution, step, {
           status: 'cancelled',
@@ -101,13 +117,22 @@ export async function executeNode({ node, handler, ctx, logger, execution, signa
       });
       return { status: 'success', output, durationMs: Date.now() - started, attempts, step: final };
     } catch (err) {
-      lastError = err;
-      const message = err instanceof Error ? err.message : String(err);
+      // Cancellation wins over retries — a cancelled run never retries.
+      if (signal?.aborted) {
+        const final = logger.stepFinished(execution, step, {
+          status: 'cancelled',
+          errorMessage: 'execution cancelled',
+          durationMs: Date.now() - started,
+          attempts,
+        });
+        return { status: 'cancelled', durationMs: Date.now() - started, attempts, step: final };
+      }
       const timedOut = err?.name === 'TimeoutError';
+      const message = timedOut ? `step timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err);
       if (timedOut) {
         logger.stepFinished(execution, step, {
           status: 'running',
-          errorMessage: `step timed out after ${timeoutMs}ms`,
+          errorMessage: message,
           durationMs: Date.now() - started,
           attempts,
         });

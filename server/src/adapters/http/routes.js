@@ -491,7 +491,7 @@ export function createRouter({ service, vaultService, catalogService, grillStrea
 
   // Re-run the latest (or a named) finished execution as a NEW run linked
   // via retryOf — history stays append-only.
-  router.post('/projects/:id/run/retry', requireOrg, requireRole('architect'), wrapAsync((req) => {
+  router.post('/projects/:id/run/retry', requireOrg, requireRole('architect'), wrapAsync(async (req) => {
     const execution = executionService.retry(req.orgId, req.params.id, { execId: req.body?.execId ?? null });
     return withStatus(execution, 201);
   }));
@@ -548,7 +548,7 @@ export function createRouter({ service, vaultService, catalogService, grillStrea
   // / fly.toml / Dockerfile), assigns a deterministic URL, and records the
   // deployment. dryRun=true returns the preview without writing files and
   // marks the row status `dry_run`. Team/trial only (Free → 402).
-  router.post('/projects/:id/deploy', requireOrg, requireRole('architect'), wrapAsync((req) => {
+  router.post('/projects/:id/deploy', requireOrg, requireRole('architect'), wrapAsync(async (req) => {
     const deployment = deployService.deploy(req.orgId, req.params.id, {
       platform: req.body?.platform ?? 'cloudflare',
       dryRun: req.body?.dryRun === true,
