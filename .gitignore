@@ -26,3 +26,4 @@ server/data/*.db
 app.db
 # Deployment artifacts
 data/deployments/
+server/data/deployments/
