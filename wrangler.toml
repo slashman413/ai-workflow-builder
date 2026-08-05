@@ -7,9 +7,10 @@
 #
 #   npx wrangler pages deploy web/dist --project-name ai-workflow-builder-web
 #
-# CI deploys through cloudflare/pages-action (see .github/workflows/ci-cd.yml),
-# which builds with VITE_API_URL and uploads web/dist directly — it does not
-# read this file, so keep the two in sync (same project name, same output dir).
+# CI deploys through cloudflare/wrangler-action (see .github/workflows/ci-cd.yml),
+# which builds with VITE_API_URL and runs `wrangler pages deploy web/dist`
+# — wrangler reads this file for project config, so keep the two in sync
+# (same project name, same output dir).
 #
 # SPA routing: web/public/_redirects carries the `/* /index.html 200` fallback
 # so client-side routes never 404 on the edge. Security headers live in
