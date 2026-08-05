@@ -35,6 +35,9 @@ ENV NODE_OPTIONS=--no-warnings
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY server ./server
+# Non-hoisted workspace deps (e.g. `stripe`) stay in server/node_modules —
+# copy them explicitly or the image crashes at boot with ERR_MODULE_NOT_FOUND.
+COPY --from=deps /app/server/node_modules ./server/node_modules
 
 # Persist SQLite to a mounted volume, owned by the unprivileged node user.
 RUN mkdir -p /data && chown -R node:node /data /app
