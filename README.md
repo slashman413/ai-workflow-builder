@@ -11,6 +11,14 @@ Node.js + React studio for designing production multi-agent systems.
 
 ---
 
+## 🖼️ Demo
+
+![AI Workflow Builder demo](workflow-builder-demo.png)
+
+**Try the live studio:** <https://workflow-builders.com>
+
+---
+
 ## Why this exists
 
 Building multi-agent AI pipelines today means one of two bad options: hand-write brittle glue
@@ -221,3 +229,18 @@ Ecosystem integrations and their licenses are tracked in [`ATTRIBUTIONS.md`](ATT
 ## License
 
 [MIT](LICENSE).
+
+---
+
+## 🛍️ Slashman Tools
+
+Part of the **Slashman Tools** ecosystem — free & open-source AI automation tools:
+
+| Tool | What it does |
+|------|--------------|
+| [AI Workflow Builder](https://workflow-builders.com) | This repo — prompt → validated multi-agent workflow |
+| [AI Prompt Library](https://slashmantools.us/ai-prompt-library/) | 500+ curated prompt templates (ChatGPT/Claude/Gemini) |
+| [AI Workflow Builder — Premium Guides & Templates ($99)](https://slashmaster6.gumroad.com/l/amwkf?utm_source=github&utm_medium=readme&utm_campaign=ai-workflow-builder) | Advanced workflow templates, n8n recipes & automation blueprints |
+| [More tools…](https://slashmantools.us/tools/) | Free AI, finance & productivity tools (中／EN) |
+
+*Built by [@slashman413](https://github.com/slashman413) · [slashmantools.us](https://slashmantools.us)*
