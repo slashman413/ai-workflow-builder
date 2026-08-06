@@ -6,10 +6,21 @@ on:
   pull_request:
     branches: [ main ]
 
+# Superseded PR runs are cancelled; main runs are serialized (never cancelled)
+# so an in-flight Cloudflare Pages deploy is not killed mid-publish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege for CI jobs; deploy-web declares its own permissions.
+permissions:
+  contents: read
+
 jobs:
   ci:
     name: Lint, Test, Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,6 +46,7 @@ jobs:
   security:
     name: Security Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -56,6 +68,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [ci, security]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
