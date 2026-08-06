@@ -218,6 +218,9 @@ fallback), and [`web/public/_headers`](web/public/_headers) (security headers
 
 Ecosystem integrations and their licenses are tracked in [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md).
 
+### 🛒 相關產品
+- [AI Workflow Builder ($99)](https://slashmaster6.gumroad.com/l/amwkf?utm_source=github&utm_medium=referral) - Turn a natural-language prompt into a validated, dependency-checked multi-agent AI workflow — ambiguity resolved up front by the interactive Grill-Me spec loop.
+
 ## License
 
 [MIT](LICENSE).
