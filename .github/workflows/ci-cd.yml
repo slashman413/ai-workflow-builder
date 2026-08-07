@@ -85,6 +85,9 @@ jobs:
         run: npm ci
 
       - name: Build web bundle
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
         run: npm run build
 
       - name: Deploy to Cloudflare Pages
