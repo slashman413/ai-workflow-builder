@@ -91,15 +91,24 @@ a volume for `/data`, and set the same env vars. Railway builds the Dockerfile d
 
 ## Part 2 — The web SPA (Cloudflare Pages)
 
-The SPA is a static Vite build. In production it must call the API on its own origin, so the build
-injects the API base URL:
+The SPA is a static Vite build. In production it must call the API on its own origin **and** sign
+users in with a Clerk **production** instance, so the build injects both:
 
 ```bash
-VITE_API_URL=https://api.workflow-builders.com/api npm run build
+VITE_API_URL=https://api.workflow-builders.com/api \
+VITE_CLERK_PUBLISHABLE_KEY=pk_live_...            \
+  npm run build
 # output: web/dist/
 ```
 
-The `deploy-web` CI job builds with that env var and publishes `web/dist` to Cloudflare Pages via
+> ⚠️ **`VITE_CLERK_PUBLISHABLE_KEY` must be a `pk_live_…` production key.** A
+> development key (`pk_test_…`) only works on `localhost`/`*.accounts.dev`; on
+> `workflow-builders.com` Clerk's dev-browser handshake fails and GitHub/Google
+> sign-in silently never works. Full Clerk production setup (DNS, OAuth apps,
+> secrets) is in [`auth-production-setup.md`](./auth-production-setup.md). The
+> SPA renders a "Sign-in is misconfigured" banner if a dev key reaches prod.
+
+The `deploy-web` CI job builds with those env vars and publishes `web/dist` to Cloudflare Pages via
 `cloudflare/pages-action`, using the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets.
 
 To wire it up once:
@@ -118,6 +127,8 @@ To wire it up once:
 |--------|---------|
 | `CLOUDFLARE_API_TOKEN` | `deploy-web` (Pages publish) |
 | `CLOUDFLARE_ACCOUNT_ID` | `deploy-web` |
+| `VITE_CLERK_PUBLISHABLE_KEY` | `deploy-web` (baked into the bundle — **must be `pk_live_…`**, see [`auth-production-setup.md`](./auth-production-setup.md)) |
+| `VITE_API_URL` | `deploy-web` (absolute API base baked into the bundle) |
 | `FLY_API_TOKEN` | `deploy-api` (Fly deploy) |
 
 If the secrets are absent, the CI (`lint/test/build`) still runs on every push and PR; only the

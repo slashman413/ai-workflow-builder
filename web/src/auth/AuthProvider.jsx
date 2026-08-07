@@ -27,6 +27,37 @@ const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
 export const AppAuthContext = createContext(null);
 
+/**
+ * A Clerk *development* instance key (`pk_test_…`) only works on `localhost`
+ * and Clerk's own `*.accounts.dev` domain. Deployed to a real production
+ * domain it cannot complete Clerk's dev-browser handshake, so `Clerk.load()`
+ * fails with `dev_browser_unauthenticated` and GitHub/Google OAuth never
+ * works — silently, from the user's point of view.
+ *
+ * Detect that specific misconfiguration up front so the UI can surface it
+ * loudly. The fix is a production-instance key (`pk_live_…`) in the deploy's
+ * `VITE_CLERK_PUBLISHABLE_KEY` secret, NOT a code change — see
+ * docs/auth-production-setup.md.
+ *
+ * @returns {{code: string, message: string} | null} the issue, or null when fine.
+ */
+export function clerkEnvIssue(
+  key = CLERK_KEY,
+  hostname = typeof window !== 'undefined' ? window.location.hostname : '',
+) {
+  if (!key || !key.startsWith('pk_test_')) return null;
+  const local =
+    hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '' || hostname.endsWith('.local');
+  if (local) return null;
+  return {
+    code: 'dev_key_on_production',
+    message:
+      `Clerk is running a development key (pk_test_…) on production domain "${hostname}". ` +
+      'GitHub/Google sign-in cannot work until a production-instance key (pk_live_…) is built ' +
+      'into the bundle via the VITE_CLERK_PUBLISHABLE_KEY deploy secret. See docs/auth-production-setup.md.',
+  };
+}
+
 /** Access the normalized auth state anywhere in the tree. */
 export const useAppAuth = () => useContext(AppAuthContext);
 
@@ -41,6 +72,13 @@ function ClerkBridge({ children }) {
   const { isLoaded, isSignedIn, userId, orgId, orgRole, getToken, signOut } = useAuth();
   const { isLoaded: orgsLoaded, organizationList, setActive } = useOrganizationList();
   const [token, setToken] = useState(null);
+
+  // Surface a dev-key-on-production misconfig once, loudly. This is the
+  // failure mode behind "GitHub/Google sign-in does nothing" on the live site.
+  const envIssue = useMemo(() => clerkEnvIssue(), []);
+  useEffect(() => {
+    if (envIssue) console.error(`[auth] ${envIssue.code}: ${envIssue.message}`);
+  }, [envIssue]);
 
   // Keep a fresh session token, re-minting after org switches (the org
   // claims are embedded in the token, so the token must follow the org).
@@ -72,6 +110,7 @@ function ClerkBridge({ children }) {
 
   const value = {
     mode: 'clerk',
+    envIssue,
     // Only wait for the org list when signed in — useOrganizationList() never
     // resolves without an active session, so gating on it would leave
     // signed-out users stuck on "Loading session…" forever (no sign-in UI).
@@ -110,6 +149,7 @@ function MockBridge({ children }) {
 
   const value = {
     mode: 'mock',
+    envIssue: null,
     isLoaded: true,
     isSignedIn,
     userId: isSignedIn ? 'user_dev' : null,

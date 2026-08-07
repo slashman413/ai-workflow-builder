@@ -72,8 +72,23 @@ function MockOAuthButtons({ onSignIn }) {
   return <ProviderRow busy={busy} setBusy={setBusy} onSignIn={async (p) => onSignIn(p.id)} />;
 }
 
+/**
+ * Loud, operator-facing banner for a dev Clerk key deployed to production —
+ * the exact reason OAuth "does nothing" on the live site. Without this the
+ * failure is silent (Clerk just returns dev_browser_unauthenticated in a
+ * network call the user never sees).
+ */
+function AuthConfigBanner({ issue }) {
+  if (!issue) return null;
+  return (
+    <div className="auth-config-error" role="alert">
+      <strong>Sign-in is misconfigured.</strong> {issue.message}
+    </div>
+  );
+}
+
 export function AuthBar() {
-  const { mode, isLoaded, isSignedIn, userId, role, signOut, setRole, signIn } = useAppAuth();
+  const { mode, isLoaded, isSignedIn, userId, role, signOut, setRole, signIn, envIssue } = useAppAuth();
 
   if (!isLoaded) {
     return <div className="auth-bar">Loading session…</div>;
@@ -85,6 +100,7 @@ export function AuthBar() {
         <div className="auth-shell">
           <h2>Sign in to your workspace</h2>
           <p className="auth-note">Your projects, workflows, and LLM keys are scoped to your organization.</p>
+          <AuthConfigBanner issue={envIssue} />
           {mode === 'clerk' ? <ClerkOAuthButtons /> : <MockOAuthButtons onSignIn={signIn} />}
           {mode === 'mock' && (
             <p className="dev-note">Dev shell — no VITE_CLERK_PUBLISHABLE_KEY set. Signing in simulates a Clerk session.</p>
