@@ -72,7 +72,10 @@ function ClerkBridge({ children }) {
 
   const value = {
     mode: 'clerk',
-    isLoaded: isLoaded && orgsLoaded,
+    // Only wait for the org list when signed in — useOrganizationList() never
+    // resolves without an active session, so gating on it would leave
+    // signed-out users stuck on "Loading session…" forever (no sign-in UI).
+    isLoaded: isLoaded && (isSignedIn ? orgsLoaded : true),
     isSignedIn,
     userId,
     orgId,
