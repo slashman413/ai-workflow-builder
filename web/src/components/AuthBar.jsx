@@ -9,7 +9,7 @@
  */
 
 import React, { useState } from 'react';
-import { useSignIn } from '@clerk/clerk-react';
+import { useSignIn, AuthenticateWithRedirectCallback } from '@clerk/clerk-react';
 import { useAppAuth } from '../auth/AuthProvider.jsx';
 import { OrgSwitcher } from './OrgSwitcher.jsx';
 import { RoleGate } from './RoleGate.jsx';
@@ -44,13 +44,22 @@ function ProviderRow({ onSignIn, busy, setBusy }) {
 function ClerkOAuthButtons() {
   const [busy, setBusy] = useState(null);
   const { isLoaded, signIn } = useSignIn();
+
+  if (typeof window !== 'undefined' && window.location.pathname === '/sso-callback') {
+    return <AuthenticateWithRedirectCallback />;
+  }
+
   return (
     <ProviderRow
       busy={busy}
       setBusy={setBusy}
       onSignIn={async (p) => {
         if (isLoaded && signIn) {
-          await signIn.authenticateWithRedirect({ strategy: p.id, redirectUrl: window.location.href });
+          await signIn.authenticateWithRedirect({ 
+            strategy: p.id, 
+            redirectUrl: `${window.location.origin}/sso-callback`,
+            redirectUrlComplete: window.location.origin 
+          });
         }
       }}
     />
