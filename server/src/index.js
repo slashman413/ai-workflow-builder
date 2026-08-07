@@ -82,6 +82,6 @@ if (process.env.CATALOG_AUTOSEED !== '0') {
   }
 }
 
-app.listen(PORT, () => {
-  console.log(`ai-workflow-builder API listening on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`ai-workflow-builder API listening on http://0.0.0.0:${PORT} (LAN accessible)`);
 });
