@@ -1,66 +1,92 @@
 # Deployment Guide
 
-How to ship `ai-workflow-builder` to production. The app deploys as **two independent halves**
-following a Cloudflare-native hybrid model:
-
-- **`workflow-builders.com`** — the React SPA on **Cloudflare Pages** (static, edge CDN).
-- **`api.workflow-builders.com`** — the Express API as a **container** on **Fly.io** (or Railway),
-  with SQLite persisted to a mounted volume.
-
-Both are shipped by the CI/CD pipeline in [`.github/workflows/ci-cd.yml`](../.github/workflows/ci-cd.yml)
-on push to `main`, gated on a green lint/test/build.
+How to ship `ai-workflow-builder`. Since 2026-08-09 the product is **self-hosted**:
+buyers download the code (MIT) and run it on machines they control. The only
+thing this repo deploys to a public host is the **static landing page** on
+`workflow-builders.com`.
 
 ```
-      browser
-        │
-        ▼
-  workflow-builders.com          api.workflow-builders.com
-  ┌────────────────────┐  /api   ┌────────────────────────┐
-  │ Cloudflare Pages   │ ──────▶ │ Express (Fly.io/Railway)│
-  │ (static web/dist)  │         │  + node:sqlite volume   │
-  └────────────────────┘         └────────────────────────┘
+  workflow-builders.com
+  ┌──────────────────────────────┐
+  │ Cloudflare Pages             │   static landing page (web/landing/)
+  │  — product intro             │   no Clerk · no API origin · no secrets
+  │  — self-host quick start     │
+  │  — Gumroad CTA               │
+  └──────────────────────────────┘
+```
+
+The studio itself has no hosted multi-tenant backend anymore — see
+[Part 2 — Self-hosting the studio](#part-2--self-hosting-the-studio).
+
+---
+
+## Part 1 — The demo landing page (Cloudflare Pages)
+
+`workflow-builders.com` is a pure static page in [`web/landing/`](../web/landing)
+(`index.html` + `styles.css` + the demo screenshot). It exists to convert
+visitors: product intro, "How it works", self-host quick start, and a Gumroad
+CTA (`https://slashmaster6.gumroad.com/l/amwkf`).
+
+It has **zero runtime dependencies** — no Clerk, no API calls, no build-time
+secrets. The `deploy-web` job in [`.github/workflows/ci-cd.yml`](../.github/workflows/ci-cd.yml)
+publishes it on every push to `main`:
+
+```bash
+wrangler pages deploy web/landing --project-name ai-workflow-builder-web --branch=main
+```
+
+One-time wiring:
+
+1. Create a Cloudflare Pages project named `ai-workflow-builder-web` (Direct Upload).
+2. Add the DNS record `workflow-builders.com` → the Pages project (proxied).
+3. Add the repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+
+Only those two secrets are required. `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`,
+and `FLY_API_TOKEN` are no longer used by CI.
+
+Manual deploy (quick test):
+
+```bash
+cd /home/wayne/workspace/github/slashman413/ai-workflow-builder/
+wrangler pages deploy web/landing \
+  --project-name=ai-workflow-builder-web \
+  --branch=main \
+  --api-token="$(cat ~/.priv/ckw19810413-cloudflare-api-token)"
 ```
 
 ---
 
-## Part 1 — The API container
+## Part 2 — Self-hosting the studio
 
-The API is a pure Node 22 service: the only runtime dependency is Express, and persistence is the
-built-in `node:sqlite` (no native module to compile). The production image is defined by the
-repo-root [`Dockerfile`](../Dockerfile) — a multi-stage `node:22-slim` build that ships only the
-`server` workspace and its production deps, runs as the unprivileged `node` user, and declares a
-container health check against `/api/health`.
+The studio is an npm-workspaces monorepo: `server/` (Express + `node:sqlite`) and
+`web/` (React + Vite). Buyers run it in minutes:
 
-### Environment variables
+```bash
+git clone https://github.com/slashman413/ai-workflow-builder.git   # or unzip the Gumroad download
+cd ai-workflow-builder
+npm install        # installs both workspaces
+npm run dev        # API on :4000 + studio on :5173
+```
 
-| Var | Default | Purpose |
-|-----|---------|---------|
-| `PORT` | `4000` | Listen port. |
-| `DB_FILE` | `/data/app.db` (image) | SQLite path. Point at the mounted volume. |
-| `NODE_ENV` | `production` | Tightens the CORS allow-list to the canonical domain. |
-| `CORS_ORIGINS` | — | Comma-separated override (e.g. add a staging/preview origin). |
-| `USE_MEMORY` | — | `1` = non-persistent in-memory repo (not for production). |
+Then open http://localhost:5173. The Vite dev server proxies `/api` to the local
+backend, so there is no CORS to configure. **No Clerk key is needed**: without
+`VITE_CLERK_PUBLISHABLE_KEY` the web app runs in mock-auth mode and the backend
+accepts the dev tenant headers — the full prompt → grill → workflow flow works
+out of the box. (Clerk mode is still supported for teams that want real
+multi-tenant auth — see [`auth-production-setup.md`](./auth-production-setup.md).)
 
-#### Secrets (Increment 4 — billing, publishing, analytics)
+### Production-ish local run
 
-| Var | Required? | Purpose |
-|-----|-----------|---------|
-| `CLERK_SECRET_KEY` | Yes (production) | Session JWT verification (`AUTH_MODE=clerk`). |
-| `VAULT_KEK` | Yes (production) | 32-byte base64 envelope key — seals LLM keys AND GitHub OAuth tokens. |
-| `STRIPE_SECRET_KEY` | For billing | Enables live Stripe checkout + subscription webhooks. |
-| `STRIPE_WEBHOOK_SECRET` | For billing | `whsec_…` — webhook signature verification (raw-body route). |
-| `STRIPE_TEAM_PRICE_ID` | For billing | The Team tier price (test mode: `price_…` from the dashboard). |
-| `GITHUB_CLIENT_ID` | For publishing | GitHub OAuth app id (repo scope). |
-| `GITHUB_CLIENT_SECRET` | For publishing | GitHub OAuth app secret. |
-| `GITHUB_REDIRECT_URI` | — | OAuth callback (default `${API_ORIGIN}/api/github/callback`). |
-| `POSTHOG_API_KEY` | — | PostHog product analytics (privacy-preserving; without it, captures are local-only no-ops). |
+```bash
+npm run build      # web bundle → web/dist
+npm start          # API in production mode (SQLite on disk)
+```
 
-Billing, publishing and analytics all **fail closed**: with a secret missing
-the corresponding feature answers `503 NOT_CONFIGURED` (billing), the OAuth
-dance refuses to start (publishing), and telemetry silently stays
-local-only — the app never crashes and never degrades security.
+### Run the API as a container
 
-### Build & run locally
+The repo-root [`Dockerfile`](../Dockerfile) is a multi-stage `node:22-slim` build
+that ships the `server` workspace, runs as the unprivileged `node` user, and
+declares a health check against `/api/health`:
 
 ```bash
 docker build -t ai-workflow-builder-api .
@@ -68,56 +94,38 @@ docker run --rm -p 4000:4000 -v awb-data:/data ai-workflow-builder-api
 curl http://localhost:4000/api/health
 ```
 
-### Fly.io
+Serve `web/dist` with any static host (nginx, Caddy, `vite preview`) and point
+`VITE_API_URL` at the container during the build.
 
-Config lives in [`fly.toml`](../fly.toml). First-time setup:
+### Railway (or any Docker host)
 
-```bash
-fly launch --no-deploy          # or `fly apps create` if the app exists
-fly volumes create awb_data --size 1   # persistent SQLite volume
-fly deploy
-```
+[`railway.toml`](../railway.toml) provides equivalent config — point Railway at
+the repo, attach a volume for `/data`, and set the env vars below. Railway builds
+the Dockerfile directly.
 
-CI then keeps it deployed automatically: the `deploy-api` job runs `flyctl deploy --remote-only`
-using the `FLY_API_TOKEN` secret. Mount the volume at `/data` so `DB_FILE=/data/app.db` survives
-restarts and redeploys.
+### Environment variables (server)
 
-### Railway
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `PORT` | `4000` | Listen port. |
+| `DB_FILE` | `./data/app.db` | SQLite path (auto-created). |
+| `NODE_ENV` | `production` | Tightens the CORS allow-list to the canonical domain. |
+| `CORS_ORIGINS` | — | Comma-separated override (e.g. add a staging/preview origin). |
+| `USE_MEMORY` | — | `1` = non-persistent in-memory repo (not for production). |
+| `AUTH_MODE` | `dev` | `clerk` = verify Clerk JWTs (`CLERK_SECRET_KEY` required). |
+| `CLERK_SECRET_KEY` | — | Session JWT verification when `AUTH_MODE=clerk`. |
+| `VAULT_KEK` | — | 32-byte base64 envelope key — seals LLM keys AND GitHub OAuth tokens. |
+| `STRIPE_SECRET_KEY` | — | Enables Stripe checkout + subscription webhooks. |
+| `STRIPE_WEBHOOK_SECRET` | — | `whsec_…` webhook signature verification. |
+| `STRIPE_TEAM_PRICE_ID` | — | The Team tier price. |
+| `GITHUB_CLIENT_ID` | — | GitHub OAuth app id (repo-scoped publishing). |
+| `GITHUB_CLIENT_SECRET` | — | GitHub OAuth app secret. |
+| `GITHUB_REDIRECT_URI` | — | OAuth callback (default `${API_ORIGIN}/api/github/callback`). |
+| `POSTHOG_API_KEY` | — | PostHog product analytics (without it, captures are local-only no-ops). |
 
-[`railway.toml`](../railway.toml) provides the equivalent config. Point Railway at the repo, attach
-a volume for `/data`, and set the same env vars. Railway builds the Dockerfile directly.
-
----
-
-## Part 2 — The web SPA (Cloudflare Pages)
-
-The SPA is a static Vite build. In production it must call the API on its own origin **and** sign
-users in with a Clerk **production** instance, so the build injects both:
-
-```bash
-VITE_API_URL=https://api.workflow-builders.com/api \
-VITE_CLERK_PUBLISHABLE_KEY=pk_live_...            \
-  npm run build
-# output: web/dist/
-```
-
-> ⚠️ **`VITE_CLERK_PUBLISHABLE_KEY` must be a `pk_live_…` production key.** A
-> development key (`pk_test_…`) only works on `localhost`/`*.accounts.dev`; on
-> `workflow-builders.com` Clerk's dev-browser handshake fails and GitHub/Google
-> sign-in silently never works. Full Clerk production setup (DNS, OAuth apps,
-> secrets) is in [`auth-production-setup.md`](./auth-production-setup.md). The
-> SPA renders a "Sign-in is misconfigured" banner if a dev key reaches prod.
-
-The `deploy-web` CI job builds with those env vars and publishes `web/dist` to Cloudflare Pages via
-`cloudflare/pages-action`, using the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets.
-
-To wire it up once:
-
-1. Create a Cloudflare Pages project named `ai-workflow-builder-web` (Direct Upload / CI).
-2. Add the DNS records: `workflow-builders.com` → the Pages project;
-   `api.workflow-builders.com` → the Fly.io/Railway app.
-3. Add the four repository secrets (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`,
-   `FLY_API_TOKEN`, and — if using Railway — its token).
+Optional features (billing, publishing, analytics) **fail closed**: with a
+secret missing the corresponding endpoint answers `503 NOT_CONFIGURED`, so a
+missing key can never crash the app.
 
 ---
 
@@ -125,35 +133,39 @@ To wire it up once:
 
 | Secret | Used by |
 |--------|---------|
-| `CLOUDFLARE_API_TOKEN` | `deploy-web` (Pages publish) |
+| `CLOUDFLARE_API_TOKEN` | `deploy-web` (landing page publish) |
 | `CLOUDFLARE_ACCOUNT_ID` | `deploy-web` |
-| `VITE_CLERK_PUBLISHABLE_KEY` | `deploy-web` (baked into the bundle — **must be `pk_live_…`**, see [`auth-production-setup.md`](./auth-production-setup.md)) |
-| `VITE_API_URL` | `deploy-web` (absolute API base baked into the bundle) |
-| `FLY_API_TOKEN` | `deploy-api` (Fly deploy) |
 
-If the secrets are absent, the CI (`lint/test/build`) still runs on every push and PR; only the
-deploy jobs — which are gated on `push` to `main` — require them.
+`VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, and `FLY_API_TOKEN` are **no
+longer used** by CI (the landing page is static; the studio is self-hosted).
+If the two Cloudflare secrets are absent, CI (`lint`/`test`/`build`) still runs
+on every push and PR; only the `deploy-web` job — gated on `push` to `main` —
+needs them.
 
 ---
 
-## Operations
+## Operations (self-hosted)
 
-- **Health:** `GET /api/health` returns status, service name, build version, uptime, and a live
-  database readiness check (`db.ok`); it answers 503 with `status: degraded` when the database is
-  unreachable, so the container `HEALTHCHECK` and Fly checks restart or fail the instance over.
-- **Backups:** the entire state is the SQLite file on the volume. Snapshot the volume (Fly volume
-  snapshots) or copy `/data/app.db` out on a schedule.
-- **Ecosystem catalog sync (nightly):** the Agent Marketplace and Cognitive Lenses are mirrored
-  from pinned upstreams (`slashman413/agency-agents` fork, `alchaincyf/nuwa-skill`) by
-  `server/src/cli/sync-catalogs.js`. The pipeline is fetch → parse → validate → transactional
-  install; every success writes an immutable snapshot and every failure records a `failed` version
-  row while the last-good catalog stays live, so a broken upstream can never take the site down.
-  Run it nightly from the API host (or via the container's cron service):
+- **Health:** `GET /api/health` returns status, service name, build version,
+  uptime, and a live database readiness check (`db.ok`); it answers 503 with
+  `status: degraded` when the database is unreachable.
+- **Backups:** the entire state is the SQLite file (`DB_FILE`). Copy it out on a
+  schedule while the server is stopped (or use `sqlite3 .backup`).
+- **Ecosystem catalog sync (nightly):** the Agent Marketplace and Cognitive
+  Lenses are mirrored from pinned upstreams (`slashman413/agency-agents` fork,
+  `alchaincyf/nuwa-skill`) by `server/src/cli/sync-catalogs.js`. Run it nightly
+  from the API host:
   `0 3 * * *  cd /srv/ai-workflow-builder && node server/src/cli/sync-catalogs.js --catalog all`
-  Pin an immutable commit instead of tracking `main` with `--ref <full-sha>` (per-catalog pins
-  require one invocation per catalog). `--dry-run` validates without writing; `--restore <id>`
-  rolls back to a stored good snapshot; `--from-bundle` installs the bundled fixtures offline.
-  First boot autoseeds from the bundle (`CATALOG_AUTOSEED=0` disables) so the marketplace works
-  before any sync.
-- **Upgrades:** push to `main`; CI rebuilds and redeploys both halves. Schema migrations in
-  `server/migrations/` are applied automatically at boot before traffic is served.
+  `--dry-run` validates without writing; `--restore <id>` rolls back to a stored
+  good snapshot; `--from-bundle` installs the bundled fixtures offline. First
+  boot autoseeds from the bundle (`CATALOG_AUTOSEED=0` disables).
+- **Upgrades:** `git pull && npm ci && npm run build && npm start`. Schema
+  migrations in `server/migrations/` are applied automatically at boot.
+
+---
+
+## Archived
+
+The old hosted-deployment plan (Fly.io API container + Clerk OAuth + Stripe) is
+archived in [`docs/archive/`](./archive/): `fly.toml` and `DEPLOYMENT-RUNBOOK.md`.
+Do not `fly launch` / `fly deploy` from them.

@@ -1,6 +1,6 @@
 # railway.toml — Railway deployment manifest for the ai-workflow-builder API.
 #
-# Alternative host to fly.toml (Option B in the Architecture Plan). Railway
+# Alternative host for self-hosted buyers (Option B in the Architecture Plan). Railway
 # builds the same Dockerfile and runs the Express API. SQLite persistence
 # requires a mounted Railway volume at /data so state survives redeploys —
 # attach one in the service settings (Railway volumes are configured in the

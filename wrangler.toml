@@ -1,25 +1,18 @@
-# wrangler.toml — Cloudflare Pages configuration for the workflow-builders.com SPA.
+# wrangler.toml — Cloudflare Pages configuration for the workflow-builders.com landing page.
 #
-# The frontend is a static React/Vite build (web/dist) served from the Pages
-# edge CDN; the API runs separately on api.workflow-builders.com (Fly.io /
-# Railway — see fly.toml / railway.toml). This file is the declarative Pages
-# project config and is used by `wrangler pages deploy`:
+# The demo site is a **static landing page** (web/landing/) served from the
+# Pages edge CDN. It has no Clerk, no API origin, and no runtime secrets.
+# The product itself is self-hosted by buyers (see docs/deployment-guide.md).
 #
-#   npx wrangler pages deploy web/dist --project-name ai-workflow-builder-web
+# CI deploys through cloudflare/wrangler-action (see .github/workflows/ci-cd.yml):
 #
-# CI deploys through cloudflare/wrangler-action (see .github/workflows/ci-cd.yml),
-# which builds with VITE_API_URL and runs `wrangler pages deploy web/dist`
-# — wrangler reads this file for project config, so keep the two in sync
-# (same project name, same output dir).
+#   wrangler pages deploy web/landing --project-name ai-workflow-builder-web
 #
-# SPA routing: web/public/_redirects carries the `/* /index.html 200` fallback
-# so client-side routes never 404 on the edge. Security headers live in
-# web/public/_headers. Both are copied into the build output by Vite.
+# This file is the declarative Pages project config; keep the project name and
+# output dir in sync with the CI command above.
 
 name = "ai-workflow-builder-web"
 compatibility_date = "2026-08-01"
-pages_build_output_dir = "web/dist"
+pages_build_output_dir = "web/landing"
 
-# No Workers/Pages Functions yet: the SPA is fully static and talks to the
-# container API on api.workflow-builders.com. If edge functions are added
-# later, declare them here ([functions] / [vars] / [[kv_namespaces]]).
+# No Workers/Pages Functions: the landing page is pure static HTML/CSS.

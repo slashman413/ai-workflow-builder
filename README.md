@@ -15,7 +15,9 @@ Node.js + React studio for designing production multi-agent systems.
 
 ![AI Workflow Builder demo](workflow-builder-demo.png)
 
-**Try the live studio:** <https://workflow-builders.com/?utm_source=github&utm_medium=readme&utm_campaign=ai-workflow-builder>
+**Product page:** <https://workflow-builders.com/?utm_source=github&utm_medium=readme&utm_campaign=ai-workflow-builder>
+— a static landing page with the self-host quick start and a Gumroad CTA. The studio
+itself is **self-hosted**: clone or download the code and run it locally in minutes.
 
 ---
 
@@ -191,24 +193,22 @@ full pre-auth flow, the Grill loop, mock simulation, and the pre-flight validato
                                └──────────────────┘
 ```
 
-## Deployment (Cloudflare-native hybrid)
+## Deployment
 
-Production runs as two independently deployed halves:
+Two different things ship from this repo:
 
-- **`workflow-builders.com`** → the React SPA on **Cloudflare Pages** (edge CDN, static build of
-  `web/dist/`). The deploy injects `VITE_API_URL=https://api.workflow-builders.com/api` at build
-  time so the SPA calls the API on its own origin.
-- **`api.workflow-builders.com`** → the Express API as a container on **Fly.io** (or Railway),
-  built from the production [`Dockerfile`](Dockerfile) with SQLite persisted to a mounted volume.
+- **`workflow-builders.com`** — a **static landing page** (`web/landing/`): product
+  intro, self-host quick start, and a Gumroad CTA. Deployed by the CI/CD pipeline
+  ([`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml)) on push to `main`
+  to the Cloudflare Pages project `ai-workflow-builder-web`. No Clerk, no API
+  origin, no login wall — pure HTML/CSS, zero runtime secrets.
+- **The studio** — **self-hosted by buyers**. Run it locally in minutes
+  (`npm install && npm run dev`), or deploy it on any Node 22.5+ host you control
+  (a VPS, a Docker container, Railway, etc.). There is no hosted multi-tenant
+  backend anymore.
 
-Both halves ship from the CI/CD pipeline in [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml)
-on push to `main`, gated behind a green lint/test/build. Container config:
-[`fly.toml`](fly.toml), [`railway.toml`](railway.toml). SPA config for the Pages
-edge: [`wrangler.toml`](wrangler.toml) (project definition),
-[`web/public/_redirects`](web/public/_redirects) (`/* /index.html 200` SPA
-fallback), and [`web/public/_headers`](web/public/_headers) (security headers
-+ asset caching) — both copied into the build by Vite. Full runbook:
-[`docs/deployment-guide.md`](docs/deployment-guide.md).
+Full guide: [`docs/deployment-guide.md`](docs/deployment-guide.md). The old Fly.io
+deployment plan is archived in [`docs/archive/`](docs/archive/).
 
 ## Documentation
 
@@ -218,7 +218,7 @@ fallback), and [`web/public/_headers`](web/public/_headers) (security headers
 | [API Reference](docs/api-reference.md) | Call every endpoint with request/response/error detail |
 | [Architecture](docs/ARCHITECTURE.md) | Understand the hexagonal layering and module seams |
 | [Domain Model](docs/DOMAIN.md) | Learn the ubiquitous language (project, spec, workflow, node) |
-| [Deployment Guide](docs/deployment-guide.md) | Ship to Cloudflare Pages + Fly.io/Railway |
+| [Deployment Guide](docs/deployment-guide.md) | Deploy the demo landing page + self-host the studio |
 | [Contributing](docs/CONTRIBUTING.md) | Set up a dev environment and land a change |
 | [ADRs](docs/adr/) | The recorded architecture decisions behind the above |
 

@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Workflow Builder — Turn Prompts into Validated Multi-Agent AI Workflows</title>
+    <meta
+      name="description"
+      content="AI Workflow Builder turns a single natural-language prompt into a validated, dependency-checked multi-agent AI workflow. Interactive Grill-Me spec loop, workflow DAG designer, pre-flight validator, and Python code generator. Self-hosted, MIT licensed, download and run in minutes."
+    />
+    <meta
+      name="keywords"
+      content="AI workflow builder, multi-agent AI, agent orchestration, workflow DAG, AI automation, Grill-Me spec, prompt to workflow, AI agents, Python code generation, self-hosted"
+    />
+    <meta name="author" content="Slashman Tools" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://workflow-builders.com/" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="AI Workflow Builder" />
+    <meta property="og:title" content="AI Workflow Builder — Turn Prompts into Validated Multi-Agent AI Workflows" />
+    <meta
+      property="og:description"
+      content="Design production multi-agent AI systems from a single prompt. Grill-Me spec loop, validated DAGs, Python code generation. Self-hosted, MIT license — download and run in minutes."
+    />
+    <meta property="og:url" content="https://workflow-builders.com/" />
+    <meta property="og:image" content="https://workflow-builders.com/workflow-builder-demo.png" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="zh_TW" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="AI Workflow Builder — Prompts to Validated Multi-Agent Workflows" />
+    <meta
+      name="twitter:description"
+      content="One plain-language prompt in → validated, dependency-checked multi-agent AI workflow out. Grill-Me spec loop + DAG designer + Python codegen. Self-hosted."
+    />
+    <meta name="twitter:image" content="https://workflow-builders.com/workflow-builder-demo.png" />
+
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%236366f1'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='sans-serif'%3E⚡%3C/text%3E%3C/svg%3E"
+    />
+
+    <!-- Structured data: SoftwareApplication + Product -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "AI Workflow Builder",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Linux, macOS, Windows (Node.js 22.5+)",
+      "url": "https://workflow-builders.com/",
+      "description": "Turn a single natural-language prompt into a validated, dependency-checked multi-agent AI workflow. Interactive Grill-Me spec loop, workflow DAG designer, pre-flight validator, and Python orchestration code generator. Self-hosted, MIT license.",
+      "license": "https://github.com/slashman413/ai-workflow-builder/blob/main/LICENSE",
+      "codeRepository": "https://github.com/slashman413/ai-workflow-builder",
+      "softwareVersion": "0.1.0",
+      "offers": {
+        "@type": "Offer",
+        "price": "99",
+        "priceCurrency": "USD",
+        "url": "https://slashmaster6.gumroad.com/l/amwkf",
+        "availability": "https://schema.org/InStock"
+      },
+      "author": {
+        "@type": "Organization",
+        "name": "Slashman Tools",
+        "url": "https://slashmantools.us"
+      }
+    }
+    </script>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="nav">
+      <div class="nav-inner">
+        <a class="brand" href="#top">
+          <span class="brand-mark">⚡</span>
+          <span class="brand-name">AI Workflow Builder</span>
+        </a>
+        <nav class="nav-links">
+          <a href="#how">How it works</a>
+          <a href="#features">Features</a>
+          <a href="#selfhost">Self-host</a>
+        </nav>
+        <a class="btn btn-primary btn-sm" href="https://slashmaster6.gumroad.com/l/amwkf" target="_blank" rel="noopener noreferrer">
+          Get the code — $99
+        </a>
+      </div>
+    </header>
+
+    <main id="top">
+      <!-- Hero -->
+      <section class="hero">
+        <div class="hero-inner">
+          <p class="eyebrow">Self-hosted · MIT licensed · No sign-up, no cloud lock-in</p>
+          <h1>Turn one prompt into a validated multi-agent AI workflow.</h1>
+          <p class="hero-sub">
+            AI Workflow Builder takes a plain-language prompt, interrogates you only about the genuinely
+            ambiguous parts (the <strong>Grill-Me</strong> loop), and produces a versioned spec, a
+            dependency-checked workflow DAG, and runnable Python orchestration code.
+          </p>
+          <div class="hero-cta">
+            <a class="btn btn-primary" href="https://slashmaster6.gumroad.com/l/amwkf" target="_blank" rel="noopener noreferrer">
+              Get the code — $99
+            </a>
+            <a class="btn btn-ghost" href="https://slashmantools.us/blog/ai-workflow-builder/" target="_blank" rel="noopener noreferrer">
+              Read the product page
+            </a>
+          </div>
+          <div class="hero-meta">
+            <span>Node.js 22.5+ · React + Express + SQLite</span>
+            <span>·</span>
+            <a href="https://github.com/slashman413/ai-workflow-builder" target="_blank" rel="noopener noreferrer">Source on GitHub</a>
+          </div>
+          <figure class="hero-shot">
+            <img
+              src="workflow-builder-demo.png"
+              alt="AI Workflow Builder studio — prompt input, Grill-Me spec panel, and workflow DAG designer"
+              width="1200"
+              height="675"
+              loading="eager"
+            />
+          </figure>
+        </div>
+      </section>
+
+      <!-- How it works -->
+      <section class="section" id="how">
+        <div class="section-inner">
+          <h2>How it works</h2>
+          <p class="section-sub">Three stages, one goal: a workflow that runs the first time.</p>
+          <div class="steps">
+            <article class="step">
+              <span class="step-num">01</span>
+              <h3>Prompt</h3>
+              <p>
+                Describe what you want in one plain-language prompt — the goal, the inputs, the output
+                you care about.
+              </p>
+            </article>
+            <article class="step">
+              <span class="step-num">02</span>
+              <h3>Grill-Me spec loop</h3>
+              <p>
+                Instead of guessing, the builder asks only about what is genuinely ambiguous and resolves
+                it into a versioned spec — before any code exists.
+              </p>
+            </article>
+            <article class="step">
+              <span class="step-num">03</span>
+              <h3>Validated workflow</h3>
+              <p>
+                A workflow DAG is scaffolded, checked for cycles and dangling dependencies, and compiled
+                into runnable Python orchestration code.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- Features -->
+      <section class="section section-alt" id="features">
+        <div class="section-inner">
+          <h2>What's inside</h2>
+          <p class="section-sub">A complete studio for designing production multi-agent systems.</p>
+          <div class="features">
+            <article class="feature">
+              <span class="feature-icon">🧠</span>
+              <h3>Deterministic Grill engine</h3>
+              <p>Asks only the questions that matter, scored by ambiguity — no infinite questionnaires.</p>
+            </article>
+            <article class="feature">
+              <span class="feature-icon">🕸️</span>
+              <h3>Workflow DAG designer</h3>
+              <p>Visual node graph with dependency checks — no cycles, no dangling references.</p>
+            </article>
+            <article class="feature">
+              <span class="feature-icon">✅</span>
+              <h3>Pre-flight validator</h3>
+              <p>Checks the workflow before it runs, so failures surface at design time, not runtime.</p>
+            </article>
+            <article class="feature">
+              <span class="feature-icon">🐍</span>
+              <h3>Python code generation</h3>
+              <p>Compiles the validated DAG into runnable Python orchestration code.</p>
+            </article>
+            <article class="feature">
+              <span class="feature-icon">🔐</span>
+              <h3>LLM key vault</h3>
+              <p>Store provider keys locally, encrypted at rest. Your keys never leave your machine.</p>
+            </article>
+            <article class="feature">
+              <span class="feature-icon">📦</span>
+              <h3>100% self-hosted</h3>
+              <p>Download, <code>npm install</code>, <code>npm run dev</code> — done. No accounts, no SaaS, no lock-in.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- Self-host quick start -->
+      <section class="section" id="selfhost">
+        <div class="section-inner">
+          <h2>Self-host in minutes</h2>
+          <p class="section-sub">
+            The entire product runs on your machine. Node.js 22.5+ is the only requirement.
+          </p>
+          <div class="quickstart">
+            <div class="quickstart-copy">
+              <ol class="quickstart-steps">
+                <li><strong>Download the code</strong> from Gumroad (or clone the repo) and unzip.</li>
+                <li><strong>Install</strong> — installs the API and the web studio together.</li>
+                <li><strong>Run</strong> — starts the API on <code>:4000</code> and the studio on <code>:5173</code>.</li>
+                <li><strong>Open</strong> <code>http://localhost:5173</code> and start building. No sign-up required.</li>
+              </ol>
+              <a class="btn btn-primary" href="https://slashmaster6.gumroad.com/l/amwkf" target="_blank" rel="noopener noreferrer">
+                Get the code — $99
+              </a>
+            </div>
+            <pre class="codeblock"><code><span class="cmt"># 1. unzip the download (or git clone …)</span>
+<span class="prompt">$</span> cd ai-workflow-builder
+
+<span class="cmt"># 2. install both workspaces (server + web)</span>
+<span class="prompt">$</span> npm install
+
+<span class="cmt"># 3. run API (:4000) + studio (:5173) together</span>
+<span class="prompt">$</span> npm run dev
+
+<span class="cmt"># 4. open the studio</span>
+<span class="prompt">$</span> open http://localhost:5173</code></pre>
+          </div>
+          <p class="quickstart-note">
+            Need the full walkthrough? See the
+            <a href="https://github.com/slashman413/ai-workflow-builder/blob/main/docs/usage-guide.md" target="_blank" rel="noopener noreferrer">usage guide</a>
+            in the repo.
+          </p>
+        </div>
+      </section>
+
+      <!-- Final CTA -->
+      <section class="section cta">
+        <div class="section-inner">
+          <h2>Stop hand-writing brittle agent glue code.</h2>
+          <p class="section-sub">
+            One prompt in → a validated, dependency-checked multi-agent workflow out. Own the code, run it
+            anywhere, forever.
+          </p>
+          <div class="hero-cta">
+            <a class="btn btn-primary" href="https://slashmaster6.gumroad.com/l/amwkf" target="_blank" rel="noopener noreferrer">
+              Get the code — $99
+            </a>
+            <a class="btn btn-ghost" href="https://slashmantools.us/blog/ai-workflow-builder/" target="_blank" rel="noopener noreferrer">
+              Learn more on slashmantools.us
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        <p>
+          <a href="https://slashmantools.us" target="_blank" rel="noopener noreferrer">slashmantools.us</a>
+          · <a href="https://github.com/slashman413/ai-workflow-builder" target="_blank" rel="noopener noreferrer">GitHub</a>
+          · <a href="https://slashmaster6.gumroad.com/l/amwkf" target="_blank" rel="noopener noreferrer">Gumroad</a>
+        </p>
+        <p class="footer-legal">© <span id="year"></span> Slashman Tools · MIT License · Self-hosted · No account required</p>
+      </div>
+    </footer>
+
+    <script>
+      document.getElementById('year').textContent = new Date().getFullYear();
+    </script>
+  </body>
+</html>

@@ -1,5 +1,11 @@
 # Production auth setup (Clerk) — GitHub / Google sign-in
 
+> **Status (2026-08-09):** Clerk is now **optional**. The product is self-hosted
+> (MIT, download-and-run) and works out of the box in mock-auth mode — no Clerk
+> key, no accounts. Follow this guide **only if** you self-host a multi-tenant
+> deployment and want real GitHub/Google sign-in. The demo site
+> (workflow-builders.com) is a static landing page and uses **no** Clerk at all.
+
 > **TL;DR of the recurring "GitHub/Google sign-in does nothing" bug:** the SPA
 > is deployed with a Clerk **development** key (`pk_test_…`) on the production
 > domain `workflow-builders.com`. Clerk development instances only work on

@@ -64,7 +64,7 @@ jobs:
         run: bash scripts/security/security-gate.sh
 
   deploy-web:
-    name: Deploy Web to Cloudflare Pages
+    name: Deploy Landing Page to Cloudflare Pages
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [ci, security]
     runs-on: ubuntu-latest
@@ -75,24 +75,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build web bundle
-        env:
-          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
-          VITE_API_URL: ${{ secrets.VITE_API_URL }}
-        run: npm run build
-
-      - name: Deploy to Cloudflare Pages
+      # workflow-builders.com is a static landing page (web/landing/) — no
+      # Clerk, no API origin. The studio itself is self-hosted by buyers from
+      # the repo (see README "Quick start"); nothing here is built against
+      # deploy secrets anymore.
+      - name: Deploy landing page to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy web/dist --project-name=ai-workflow-builder-web --branch=main
+          command: pages deploy web/landing --project-name=ai-workflow-builder-web --branch=main
