@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node 22.5+](https://img.shields.io/badge/node-22.5%2B-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![CI](https://img.shields.io/badge/CI-eslint%20%7C%20node%3Atest%20%7C%20vite%20build-informational.svg)](.github/workflows/ci-cd.yml)
+[![CI](https://img.shields.io/badge/CI-lint%20%7C%20test%20%7C%20coverage%20%7C%20build%20%7C%20security-informational.svg)](.github/workflows/ci-cd.yml)
 
 This is the codebase behind **[workflow-builders.com](https://workflow-builders.com)** — a
 Node.js + React studio for designing production multi-agent systems.
@@ -152,9 +152,13 @@ See [`docs/api-reference.md`](docs/api-reference.md) for request/response shapes
 
 ```bash
 node scripts/security/secret-scan.mjs      # HIGH/MEDIUM/LOW secret patterns across the tree
-node scripts/security/coverage-gate.mjs    # line coverage ≥ 90% (96% today)
-bash scripts/security/security-gate.sh     # lint + test + build + secret scan + coverage
+node scripts/security/coverage-gate.mjs    # line coverage ≥ 90% (~95% today)
+bash scripts/security/security-gate.sh     # npm audit + secret scan + OSV vulnerability check
 ```
+
+CI runs `lint`, `test`, the coverage gate, and `build` in the **Lint, Test, Build** job, and
+`security-gate.sh` in the **Security Gate** job (see
+[`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml)).
 
 ### Increment 4 environment variables
 

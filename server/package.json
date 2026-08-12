@@ -17,7 +17,6 @@
   },
   "dependencies": {
     "@clerk/backend": "^3.15.0",
-    "@libsql/client": "^0.17.4",
     "express": "^4.19.2",
     "posthog-node": "^5.47.3",
     "stripe": "^17.7.0",

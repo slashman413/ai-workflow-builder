@@ -40,6 +40,11 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # Threshold-based line-coverage gate (default 90%; ~95% today). A PR that
+      # adds untested code cannot silently lower the bar.
+      - name: Run coverage gate
+        run: node scripts/security/coverage-gate.mjs
+
       - name: Build web bundle
         run: npm run build
 
