@@ -1,5 +1,7 @@
 # ai-workflow-builder
 
+📬 Get AI tips & prompt templates — subscribe to the Slashman Tools newsletter: https://slashmantools.us/subscribe
+
 > Turn a single natural-language prompt into a validated, dependency-checked multi-agent AI workflow. Ambiguity is resolved up front by an interactive **Grill-Me** spec loop — not discovered later in production.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
