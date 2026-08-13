@@ -253,3 +253,7 @@ Part of the **Slashman Tools** ecosystem — free & open-source AI automation to
 | [More tools…](https://slashmantools.us/tools/?utm_source=github&utm_medium=readme&utm_campaign=ai-workflow-builder) | Free AI, finance & productivity tools (中／EN) |
 
 *Built by [@slashman413](https://github.com/slashman413) · [slashmantools.us](https://slashmantools.us/?utm_source=github&utm_medium=readme&utm_campaign=ai-workflow-builder)*
+
+---
+## 🚀 Automate Your Workflow
+Enjoying this tool? Join our [weekly newsletter](https://slashmantools.us/newsletter/?utm_source=github&utm_medium=readme) to get AI tools, automation tips, and digital product strategies directly in your inbox. No spam, just pure value.
