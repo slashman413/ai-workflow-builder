@@ -79,7 +79,10 @@ function routesFromApp(app) {
       }
     }
   };
-  visit(app._router.stack, '');
+  // Express 5 renamed the internal router from `app._router` to `app.router`.
+  // Read whichever is present so the contract check works across both majors.
+  const router = app._router || app.router;
+  visit(router.stack, '');
   return found;
 }
 
