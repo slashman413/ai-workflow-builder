@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import Stripe from 'stripe';
 import { createApp } from '../src/adapters/http/app.js';
 import { createMemoryRepos } from '../src/adapters/persistence/memoryRepos.js';
+import { periodFor } from '../src/application/entitlementService.js';
 import { generate } from '../src/domain/codegen/generator.js';
 import { preFlightCheck, preflightWorkflow } from '../src/domain/workflow/preflight.js';
 import { seal } from '../src/domain/vault/crypto.js';
@@ -280,8 +281,14 @@ test('[B3] Free tier simulate is a mocked preview', async () => {
 test('[B4] Free tier: the 11th grill session answers 402 and never opens a stream', async () => {
   // Burn the monthly quota directly (the service gate is covered in
   // entitlement.test.js; here we prove the ROUTE enforces it).
+  //
+  // The app's EntitlementService runs on the WALL CLOCK (createApp passes no
+  // pinned now), so it reads the counter from periodFor() (current month).
+  // We must burn into that same period or the gate won't see it — hardcoding
+  // a past month ('2026-08') rotted out once the clock left that month.
+  const period = periodFor();
   for (let i = 1; i <= 10; i += 1) {
-    repos.usage.increment('org-free', 'grill_session_started', '2026-08', 1);
+    repos.usage.increment('org-free', 'grill_session_started', period, 1);
   }
   const res = await fetch(`${base}/grill/stream`, {
     method: 'POST',
@@ -497,8 +504,10 @@ test('[D2] billing is tenant-scoped: upgrading one org never leaks to another', 
 });
 
 test('[D3] usage counters are tenant-scoped', () => {
-  assert.equal(repos.usage.count('org-free', 'grill_session_started', '2026-08'), 10);
-  assert.equal(repos.usage.count('org-other', 'grill_session_started', '2026-08'), 0);
+  // Reads the same wall-clock period [B4] burned into (see its comment).
+  const period = periodFor();
+  assert.equal(repos.usage.count('org-free', 'grill_session_started', period), 10);
+  assert.equal(repos.usage.count('org-other', 'grill_session_started', period), 0);
 });
 
 /* ---------------------------------------------------------------------------

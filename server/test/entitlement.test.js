@@ -76,7 +76,10 @@ test('free tier: blocked sessions never consume quota (gate runs before incremen
   const { repos, service } = makeService();
   for (let i = 1; i <= 10; i += 1) service.assertGrillQuota('org-a');
   assert.throws(() => service.assertGrillQuota('org-a'));
-  assert.equal(repos.usage.count('org-a', GRILL_USAGE_METRIC, periodFor()), 10);
+  // Assert against the PINNED fixture period (makeService's now = 2026-08-15),
+  // never the wall clock — a no-arg periodFor() would drift to a later month
+  // and the counter key would no longer match (date-rot regression).
+  assert.equal(repos.usage.count('org-a', GRILL_USAGE_METRIC, periodFor(new Date('2026-08-15T00:00:00Z'))), 10);
 });
 
 test('free tier: repository export is refused with 402 PAYMENT_REQUIRED', () => {
@@ -153,5 +156,6 @@ test('export usage is recorded for Team tiers (reconciliation of the gate)', () 
   activateTeam(repos, 'org-a');
   service.assertExportAllowed('org-a');
   service.assertExportAllowed('org-a');
-  assert.equal(repos.usage.count('org-a', EXPORT_USAGE_METRIC, periodFor()), 2);
+  // Pinned fixture period (makeService's now = 2026-08-15), not the wall clock.
+  assert.equal(repos.usage.count('org-a', EXPORT_USAGE_METRIC, periodFor(new Date('2026-08-15T00:00:00Z'))), 2);
 });
