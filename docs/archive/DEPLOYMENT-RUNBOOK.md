@@ -154,7 +154,7 @@ If you want to enable Team tier billing ($99/mo):
 ### 3.1 Create Fly.io App (One-time)
 
 ```bash
-cd /home/wayne/workspace/github/slashman413/ai-workflow-builder/
+cd $REPO/
 
 # Login to Fly.io if not already
 fly auth login
@@ -280,7 +280,7 @@ wrangler whoami | grep 'account_id'
 To deploy manually without CI:
 
 ```bash
-cd /home/wayne/workspace/github/slashman413/ai-workflow-builder/
+cd $REPO/
 
 # Build with production API URL
 VITE_CLERK_PUBLISHABLE_KEY="pk_test_..." \

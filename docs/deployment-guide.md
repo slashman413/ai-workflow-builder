@@ -47,7 +47,7 @@ and `FLY_API_TOKEN` are no longer used by CI.
 Manual deploy (quick test):
 
 ```bash
-cd /home/wayne/workspace/github/slashman413/ai-workflow-builder/
+cd $REPO/
 wrangler pages deploy web/landing \
   --project-name=ai-workflow-builder-web \
   --branch=main \
