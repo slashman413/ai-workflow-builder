@@ -27,3 +27,6 @@ app.db
 # Deployment artifacts
 data/deployments/
 server/data/deployments/
+
+# Wrangler
+.wrangler/

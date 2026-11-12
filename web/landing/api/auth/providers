@@ -1,0 +1,9 @@
+{
+  "google": {
+    "id": "google",
+    "name": "Google",
+    "type": "oauth",
+    "signinUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+    "callbackUrl": "https://workflow-builders.com/api/auth/callback/google"
+  }
+}
